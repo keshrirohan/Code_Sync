@@ -43,7 +43,7 @@ export default async function DashboardPage() {
       }),
     ]);
 
-  const recentItems: SyncHistoryItem[] = recentSyncs.map((s) => ({
+  const recentItems: SyncHistoryItem[] = recentSyncs.map((s: typeof recentSyncs[number]) => ({
     id: s.id,
     problemName: s.problemName,
     slug: s.slug,
@@ -80,7 +80,7 @@ export default async function DashboardPage() {
           value={uniqueLanguages}
           subtitle={
             languageGroups
-              .map((g) => g.language)
+              .map((g: typeof languageGroups[number]) => g.language)
               .slice(0, 3)
               .join(", ") || "None yet"
           }

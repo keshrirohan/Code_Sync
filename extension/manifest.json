@@ -9,7 +9,9 @@
     ],
     "host_permissions": [
         "https://leetcode.com/*",
-        "http://localhost:3000/*"
+        "https://leetcode.cn/*",
+        "http://localhost:3000/*",
+        "https://YOUR_PRODUCTION_DOMAIN/*"
     ],
     "content_scripts": [
         {

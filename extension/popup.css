@@ -520,3 +520,57 @@ body {
 .popup-container > *:nth-child(4) { animation-delay: 0.15s; }
 .popup-container > *:nth-child(5) { animation-delay: 0.2s; }
 .popup-container > *:nth-child(6) { animation-delay: 0.25s; }
+
+/* ─── Server URL Config ─────────────────────────────────────────────────────── */
+
+.control-row-vertical {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.url-input-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.url-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.url-input:focus {
+  border-color: var(--primary);
+}
+
+.btn-save-url {
+  background: var(--primary-bg);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--primary-hover);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.btn-save-url:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.btn-save-url.saved {
+  background: var(--success-bg);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--success);
+}

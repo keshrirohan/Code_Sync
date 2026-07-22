@@ -170,4 +170,34 @@
       enabled,
     });
   });
+
+  // ─── Server URL Config ─────────────────────────────────────────────────────
+
+  const serverUrlInput = document.getElementById("server-url-input");
+  const saveUrlBtn = document.getElementById("save-url-btn");
+
+  // Populate the input with the currently stored URL
+  const storedUrl = await getBaseUrl();
+  serverUrlInput.value = storedUrl;
+
+  saveUrlBtn.addEventListener("click", async () => {
+    const newUrl = serverUrlInput.value.trim().replace(/\/$/, ""); // strip trailing slash
+    if (!newUrl) return;
+
+    await chrome.storage.sync.set({ baseUrl: newUrl });
+
+    // Update all links immediately
+    signinBtn.href = newUrl;
+    dashboardLink.href = `${newUrl}/dashboard`;
+    settingsLink.href = `${newUrl}/dashboard/settings`;
+    historyLink.href = `${newUrl}/dashboard/history`;
+
+    // Visual feedback
+    saveUrlBtn.textContent = "Saved ✓";
+    saveUrlBtn.classList.add("saved");
+    setTimeout(() => {
+      saveUrlBtn.textContent = "Save";
+      saveUrlBtn.classList.remove("saved");
+    }, 2000);
+  });
 })();

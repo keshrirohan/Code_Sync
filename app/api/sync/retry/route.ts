@@ -2,25 +2,31 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import {
-  commitFile,
-  getFileContent,
-  buildFilePath,
-  buildCommitMessage,
-} from "@/lib/github";
-import type { ApiResponse, SyncResult } from "@/types";
+import type { ApiResponse } from "@/types";
 
+/**
+ * POST /api/sync/retry
+ *
+ * CodeSync does NOT store raw solution code on the server — only a SHA-256
+ * hash for deduplication. Because of this, a true server-side retry (recreating
+ * the commit from stored data) is impossible.
+ *
+ * This endpoint exists so the extension can call it and receive a friendly,
+ * structured error telling the user to re-submit from LeetCode. It also
+ * validates the sync record belongs to the requesting user.
+ */
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id || !session.accessToken) {
+    if (!session?.user?.id) {
       return NextResponse.json<ApiResponse>(
         { success: false, error: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    const { syncHistoryId } = (await request.json()) as { syncHistoryId: string };
+    const body = (await request.json()) as { syncHistoryId?: string };
+    const { syncHistoryId } = body;
 
     if (!syncHistoryId) {
       return NextResponse.json<ApiResponse>(
@@ -29,7 +35,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find the failed sync record
+    // Verify the record exists and belongs to this user
     const failedSync = await prisma.syncHistory.findFirst({
       where: {
         id: syncHistoryId,
@@ -45,53 +51,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get the user's selected repo
-    const settings = await prisma.settings.findUnique({
-      where: { userId: session.user.id },
-    });
-
-    if (!settings?.selectedRepoFullName) {
-      return NextResponse.json<ApiResponse>(
-        { success: false, error: "No repository selected." },
-        { status: 400 }
-      );
-    }
-
-    const [owner, repo] = settings.selectedRepoFullName.split("/");
-
-    // We need to re-fetch the original code — use the stored codeHash to verify
-    // Since we can't reconstruct code from hash, we need to re-commit
-    // The retry should be triggered with the original code, but we'll attempt
-    // to rebuild from what we have
-
-    const filePath = buildFilePath(
-      failedSync.category,
-      failedSync.problemName,
-      failedSync.language
+    // Inform the caller: raw code is never stored server-side (security by design).
+    // The user must navigate back to the LeetCode problem and re-submit to trigger
+    // a fresh sync via the extension.
+    return NextResponse.json<ApiResponse>(
+      {
+        success: false,
+        error: `To retry syncing "${failedSync.problemName}", please navigate to the problem on LeetCode and re-submit your solution. The extension will detect the accepted submission and sync it automatically.`,
+      },
+      { status: 422 }
     );
-
-    // Check if file exists on GitHub already
-    let fileSha: string | undefined;
-    try {
-      const existing = await getFileContent(session.accessToken, owner, repo, filePath);
-      if (existing) {
-        fileSha = existing.sha;
-      }
-    } catch {
-      // File doesn't exist
-    }
-
-    // For retry, we need the code. If it wasn't stored, we can only mark as needing re-submit.
-    // In practice, the extension should re-send the code for retries.
-    return NextResponse.json<ApiResponse<SyncResult>>({
-      success: false,
-      error: "Please re-submit the solution from the extension to retry. The original code is not stored on the server for security.",
-    });
   } catch (error) {
     console.error("[SYNC_RETRY_ERROR]", error);
     return NextResponse.json<ApiResponse>(
-      { success: false, error: "Retry failed." },
+      { success: false, error: "Retry check failed." },
       { status: 500 }
     );
   }
 }
+

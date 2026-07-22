@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
       prisma.syncHistory.count({ where }),
     ]);
 
-    const history: SyncHistoryItem[] = items.map((item) => ({
+    const history: SyncHistoryItem[] = items.map((item: typeof items[number]) => ({
       id: item.id,
       problemName: item.problemName,
       slug: item.slug,

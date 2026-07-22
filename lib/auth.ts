@@ -73,7 +73,7 @@ export const authOptions: NextAuthOptions = {
     async linkAccount({ account, profile }) {
       // Store the GitHub username on the User record
       if (account.provider === "github" && profile) {
-        const githubProfile = profile as { login?: string; id?: number };
+        const githubProfile = profile as unknown as { login?: string; id?: number };
         await prisma.user.update({
           where: { id: account.userId },
           data: {
@@ -83,6 +83,7 @@ export const authOptions: NextAuthOptions = {
         });
       }
     },
+
   },
 
   pages: {
