@@ -8,24 +8,17 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Allow Chrome extension to make credentialed requests to API routes
         source: "/api/:path*",
         headers: [
-          {
-            key: "Access-Control-Allow-Origin",
-            value: "*",
-          },
+          // OPTIONS preflight — echoed per-request in the route handlers
+          // These static headers handle non-credentialed GETs (e.g. health checks)
           {
             key: "Access-Control-Allow-Methods",
             value: "GET, POST, PUT, DELETE, OPTIONS",
           },
           {
             key: "Access-Control-Allow-Headers",
-            value: "Content-Type, Authorization",
-          },
-          {
-            key: "Access-Control-Allow-Credentials",
-            value: "true",
+            value: "Content-Type, Authorization, Cookie",
           },
         ],
       },

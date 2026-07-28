@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { ApiResponse, SyncHistoryItem } from "@/types";
+
+// ─── Query param schema ────────────────────────────────────────────────────────
+const querySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  status: z.enum(["SUCCESS", "FAILED", "SKIPPED"]).optional(),
+  search: z.string().optional(),
+  language: z.string().optional(),
+  category: z.string().optional(),
+});
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,15 +25,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Parse + validate query params
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20")));
-    const status = searchParams.get("status"); // SUCCESS | FAILED | SKIPPED
-    const search = searchParams.get("search");
+    const parsed = querySchema.safeParse(Object.fromEntries(searchParams.entries()));
+
+    if (!parsed.success) {
+      return NextResponse.json<ApiResponse>(
+        { success: false, error: "Invalid query parameters" },
+        { status: 400 }
+      );
+    }
+
+    const { page, limit, status, search, language, category } = parsed.data;
 
     const where = {
       userId: session.user.id,
       ...(status ? { status } : {}),
+      ...(language ? { language: language.toLowerCase() } : {}),
+      ...(category ? { category: { contains: category, mode: "insensitive" as const } } : {}),
       ...(search
         ? {
             problemName: {
@@ -43,14 +63,16 @@ export async function GET(request: NextRequest) {
       prisma.syncHistory.count({ where }),
     ]);
 
-    const history: SyncHistoryItem[] = items.map((item: typeof items[number]) => ({
+    const history: SyncHistoryItem[] = items.map((item) => ({
       id: item.id,
       problemName: item.problemName,
       slug: item.slug,
       difficulty: item.difficulty,
       language: item.language,
+      category: item.category,
       status: item.status as SyncHistoryItem["status"],
       commitUrl: item.commitUrl,
+      errorMsg: item.errorMsg,
       syncedAt: item.syncedAt.toISOString(),
     }));
 

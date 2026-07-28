@@ -1,479 +1,260 @@
-// ─── CodeSync Content Script ─────────────────────────────────────────────────
-// Runs on: https://leetcode.com/problems/*
-// Detects accepted submissions, extracts code + metadata, sends to background.
+// ─── CodeSync Content Script ──────────────────────────────────────────────────
+// Runs in the ISOLATED extension world on https://leetcode.com/problems/*
+// run_at: document_idle  ← DOM is ready, safe to inject <script>
+//
+// Responsibilities:
+//   1. Inject injected.js into the PAGE's main world (so XHR/fetch patches work)
+//   2. Listen for window.postMessage from injected.js
+//   3. Dedup by submission ID to avoid double-syncs from multiple intercepts
+//   4. Relay accepted events to the background service worker
+//   5. Show toast notifications on screen
 // ─────────────────────────────────────────────────────────────────────────────
 
 (function () {
-  "use strict";
+  'use strict';
 
-  // Guard against re-injection
-  if (window.__codeSyncInjected) return;
-  window.__codeSyncInjected = true;
+  if (window.__csContentV2) return;
+  window.__csContentV2 = true;
 
-  console.log("🚀 CodeSync: Content script loaded");
+  // ─── Inject page-world script ──────────────────────────────────────────────
+  // We can't just define fetch patches here — content scripts run in an
+  // isolated world. A <script> tag runs in the PAGE's main world.
+  (function inject() {
+    var s = document.createElement('script');
+    s.src = chrome.runtime.getURL('injected.js');
+    s.onload = function () { s.remove(); };
+    (document.head || document.documentElement).appendChild(s);
+  })();
 
-  // ─── State ───────────────────────────────────────────────────────────────
+  // ─── In-tab dedup (submission IDs seen in this page session) ──────────────
+  var seenThisSession = {};
+  var COOLDOWN_MS = 8000; // ignore duplicate events within 8 s (slug-based fallback)
+  var lastSlug = null;
+  var lastSlugTime = 0;
 
-  let isProcessing = false;
-  let lastProcessedSlug = null;
-  let lastProcessedTime = 0;
-  const COOLDOWN_MS = 10000; // 10 seconds between syncs for same problem
+  // ─── Listen for messages from injected.js ─────────────────────────────────
+  window.addEventListener('message', function (evt) {
+    if (!evt.data || !evt.data.__cs2) return;
+    if (evt.data.type !== 'SUBMISSION_ACCEPTED') return;
 
-  // ─── Toast Notification System ───────────────────────────────────────────
+    var detail = evt.data.data || {};
+    var subId  = detail.submissionId;
 
-  function createToastContainer() {
-    let container = document.getElementById("codesync-toast-container");
-    if (container) return container;
+    // Dedup by submission ID
+    if (subId && seenThisSession[subId]) return;
+    if (subId) seenThisSession[subId] = true;
 
-    container = document.createElement("div");
-    container.id = "codesync-toast-container";
-    container.style.cssText = `
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      z-index: 99999;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    `;
-    document.body.appendChild(container);
-    return container;
-  }
+    // Slug-level cooldown (fallback when subId is missing)
+    var slug = detail.slug || getSlugFromUrl();
+    var now  = Date.now();
+    if (!subId && slug === lastSlug && now - lastSlugTime < COOLDOWN_MS) return;
+    lastSlug = slug; lastSlugTime = now;
 
-  function showToast(message, type = "info") {
-    const container = createToastContainer();
+    // Enrich with page-extracted metadata (fills gaps if GraphQL didn't have it)
+    var problemName = detail.problemName || getPageTitle();
+    var difficulty  = detail.difficulty  || getPageDifficulty();
+    var lang        = detail.lang        || getPageLang();
 
-    const colors = {
-      info: { bg: "rgba(59,130,246,0.95)", icon: "⚡" },
-      success: { bg: "rgba(34,197,94,0.95)", icon: "✅" },
-      error: { bg: "rgba(239,68,68,0.95)", icon: "❌" },
-      warning: { bg: "rgba(234,179,8,0.95)", icon: "⚠️" },
+    var payload = {
+      submissionId: subId,
+      source:       detail.source,
+      slug:         slug,
+      problemName:  problemName,
+      difficulty:   difficulty,
+      lang:         lang,
+      langVerbose:  detail.langVerbose || null,
+      code:         detail.code || null,
+      runtime:      detail.runtime || null,
+      memory:       detail.memory  || null,
+      problemNumber: detail.problemNumber || null,
     };
 
-    const { bg, icon } = colors[type] || colors.info;
-
-    const toast = document.createElement("div");
-    toast.style.cssText = `
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 20px;
-      border-radius: 12px;
-      background: ${bg};
-      color: white;
-      font-size: 14px;
-      font-weight: 500;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-      backdrop-filter: blur(8px);
-      transform: translateX(120%);
-      transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
-                  opacity 0.35s ease;
-      opacity: 0;
-      max-width: 360px;
-      line-height: 1.4;
-    `;
-
-    toast.innerHTML = `<span style="font-size:16px">${icon}</span><span>${message}</span>`;
-    container.appendChild(toast);
-
-    // Slide in
-    requestAnimationFrame(() => {
-      toast.style.transform = "translateX(0)";
-      toast.style.opacity = "1";
+    // Tell background service worker to sync
+    chrome.runtime.sendMessage({ type: 'ACCEPTED_SUBMISSION', payload: payload }, function (resp) {
+      if (chrome.runtime.lastError) return; // popup closed, etc.
+      // Response comes back after sync completes
     });
 
-    // Auto-dismiss
-    setTimeout(() => {
-      toast.style.transform = "translateX(120%)";
-      toast.style.opacity = "0";
-      setTimeout(() => toast.remove(), 400);
-    }, 4500);
-  }
-
-  // ─── Problem Metadata Extraction ─────────────────────────────────────────
-
-  function extractProblemSlug() {
-    return extractSlugFromUrl(window.location.href);
-  }
-
-  function extractProblemName() {
-    // LeetCode renders the title in an <a> tag with the problem link
-    // or in a specific heading element
-    const titleEl =
-      document.querySelector('[data-cy="question-title"]') ||
-      document.querySelector(".text-title-large a") ||
-      document.querySelector('a[href*="/problems/"][class*="text-label"]') ||
-      document.querySelector('div[data-track-load="description_content"] h4') ||
-      document.querySelector('[class*="flexlayout__tab"] [class*="title"]');
-
-    if (titleEl) {
-      return titleEl.textContent.trim().replace(/^\d+\.\s*/, "");
-    }
-
-    // Fallback: derive from slug
-    const slug = extractProblemSlug();
-    if (slug) {
-      return slug
-        .split("-")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-    }
-
-    return null;
-  }
-
-  function extractDifficulty() {
-    // LeetCode shows difficulty with specific color-coded classes
-    const difficultyEl =
-      document.querySelector('[diff]') ||
-      document.querySelector('div[class*="text-difficulty"]') ||
-      document.querySelector('[class*="text-olive"]') ||   // Easy
-      document.querySelector('[class*="text-yellow"]') ||  // Medium  
-      document.querySelector('[class*="text-pink"]');      // Hard
-
-    if (difficultyEl) {
-      const text = difficultyEl.textContent.trim().toLowerCase();
-      if (text.includes("easy")) return "Easy";
-      if (text.includes("medium")) return "Medium";
-      if (text.includes("hard")) return "Hard";
-    }
-
-    // Try matching by color classes
-    const easyEl = document.querySelector('[class*="text-olive"], [class*="text-green"], .text-difficulty-easy');
-    if (easyEl) return "Easy";
-    const medEl = document.querySelector('[class*="text-yellow"], [class*="text-orange"], .text-difficulty-medium');
-    if (medEl) return "Medium";
-    const hardEl = document.querySelector('[class*="text-pink"], [class*="text-red"], .text-difficulty-hard');
-    if (hardEl) return "Hard";
-
-    return "Unknown";
-  }
-
-  function extractCategory() {
-    // Try to find topic tags on the problem page
-    const tagEls = document.querySelectorAll(
-      'a[href*="/tag/"], [class*="topic-tag"], div[class*="tag-"] a'
-    );
-
-    if (tagEls.length > 0) {
-      // Return the first tag as the primary category
-      return tagEls[0].textContent.trim();
-    }
-
-    return "Uncategorized";
-  }
-
-  // ─── Code & Language Extraction ──────────────────────────────────────────
-
-  function extractLanguage() {
-    // LeetCode's language selector button contains the current language
-    const langButton =
-      document.querySelector('[id*="headlessui-listbox-button"]') ||
-      document.querySelector('button[class*="rounded"][class*="items-center"] .text-label-2') ||
-      document.querySelector('div[class*="flex"][class*="cursor-pointer"] .text-label-2') ||
-      document.querySelector('[data-cy="lang-btn"]');
-
-    if (langButton) {
-      const langText = langButton.textContent.trim().toLowerCase();
-      return normalizeLeetCodeLanguage(langText);
-    }
-
-    // Fallback: try to find from the editor's language mode
-    const editorEl = document.querySelector('.monaco-editor');
-    if (editorEl) {
-      const modeAttr = editorEl.getAttribute('data-mode-id');
-      if (modeAttr) return normalizeLeetCodeLanguage(modeAttr);
-    }
-
-    return "python3"; // Safe default
-  }
-
-  function normalizeLeetCodeLanguage(lang) {
-    const map = {
-      "c++": "cpp",
-      "c#": "csharp",
-      "python 3": "python3",
-      "python3": "python3",
-      "python": "python3",
-      "javascript": "javascript",
-      "typescript": "typescript",
-      "java": "java",
-      "go": "go",
-      "golang": "go",
-      "ruby": "ruby",
-      "swift": "swift",
-      "kotlin": "kotlin",
-      "rust": "rust",
-      "scala": "scala",
-      "php": "php",
-      "c": "c",
-      "dart": "dart",
-      "racket": "racket",
-      "erlang": "erlang",
-      "elixir": "elixir",
-      "mysql": "mysql",
-      "ms sql server": "mssql",
-      "oracle": "oraclesql",
-    };
-
-    const normalized = lang.toLowerCase().trim();
-    return map[normalized] || normalized;
-  }
-
-  function extractCode() {
-    // Strategy 1: Monaco editor — read from the view lines
-    const monacoLines = document.querySelectorAll(
-      '.monaco-editor .view-lines .view-line'
-    );
-    if (monacoLines.length > 0) {
-      const lines = Array.from(monacoLines).map((line) => {
-        // Get the text content, preserving whitespace structure
-        return line.textContent;
-      });
-      const code = lines.join("\n");
-      if (code.trim().length > 0) return code;
-    }
-
-    // Strategy 2: Try the textarea-based editor (older LeetCode)
-    const textarea = document.querySelector(
-      'textarea[name="typed-code"], .CodeMirror textarea'
-    );
-    if (textarea && textarea.value.trim().length > 0) {
-      return textarea.value;
-    }
-
-    // Strategy 3: Try CodeMirror content
-    const cmContent = document.querySelector('.CodeMirror-code');
-    if (cmContent) {
-      const lines = Array.from(cmContent.querySelectorAll('.CodeMirror-line')).map(
-        (line) => line.textContent
-      );
-      const code = lines.join("\n");
-      if (code.trim().length > 0) return code;
-    }
-
-    return null;
-  }
-
-  // ─── Submission Detection ────────────────────────────────────────────────
-
-  /**
-   * Check if an element or its children contain the "Accepted" text
-   * that LeetCode shows after a successful submission.
-   */
-  function isAcceptedResult(node) {
-    if (!node || !node.textContent) return false;
-
-    const text = node.textContent.toLowerCase();
-
-    // LeetCode shows "Accepted" in the result panel
-    if (
-      text.includes("accepted") &&
-      !text.includes("not accepted") &&
-      !text.includes("wrong answer") &&
-      !text.includes("time limit") &&
-      !text.includes("runtime error") &&
-      !text.includes("compile error") &&
-      !text.includes("memory limit")
-    ) {
-      // Verify it's actually the result indicator, not description text
-      const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-      if (!el) return false;
-
-      // Check for LeetCode's success indicator classes/attributes
-      const isResultPanel =
-        el.closest('[data-e2e-locator="submission-result"]') ||
-        el.closest('[class*="result-"]') ||
-        el.closest('[class*="success"]') ||
-        el.querySelector('[class*="text-green"]') ||
-        el.querySelector('[data-e2e-locator="submission-result"]');
-
-      // Also check by matching LeetCode's specific "Accepted" heading style  
-      const hasSuccessColor =
-        el.style?.color?.includes("rgb(45") || // green tones
-        el.classList?.toString()?.includes("green") ||
-        el.classList?.toString()?.includes("success") ||
-        el.classList?.toString()?.includes("accepted");
-
-      return !!(isResultPanel || hasSuccessColor);
-    }
-
-    return false;
-  }
-
-  /**
-   * Broader check: scan the result area for accepted status.
-   */
-  function checkForAcceptedSubmission() {
-    // LeetCode's submission result panel selectors
-    const resultSelectors = [
-      '[data-e2e-locator="submission-result"]',
-      '#qd-content [class*="success"]',
-      '[class*="result__"] [class*="accepted"]',
-      '[class*="text-green-s"][class*="text-"]',
-    ];
-
-    for (const selector of resultSelectors) {
-      const el = document.querySelector(selector);
-      if (el && el.textContent.toLowerCase().includes("accepted")) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  // ─── Sync Handler ────────────────────────────────────────────────────────
-
-  async function handleAcceptedSubmission() {
-    // Prevent duplicate processing
-    const slug = extractProblemSlug();
-    const now = Date.now();
-
-    if (!slug) {
-      console.warn("CodeSync: Could not extract problem slug");
-      return;
-    }
-
-    if (isProcessing) {
-      console.log("CodeSync: Already processing, skipping");
-      return;
-    }
-
-    if (slug === lastProcessedSlug && now - lastProcessedTime < COOLDOWN_MS) {
-      console.log("CodeSync: Cooldown active for this problem, skipping");
-      return;
-    }
-
-    isProcessing = true;
-    lastProcessedSlug = slug;
-    lastProcessedTime = now;
-
-    try {
-      // Check auto-sync preference
-      const autoSync = await getAutoSync();
-      if (!autoSync) {
-        console.log("CodeSync: Auto-sync is disabled");
-        isProcessing = false;
-        return;
-      }
-
-      // Small delay to let LeetCode finish rendering
-      await new Promise((r) => setTimeout(r, 1500));
-
-      const problemName = extractProblemName();
-      const difficulty = extractDifficulty();
-      const language = extractLanguage();
-      const code = extractCode();
-      const category = extractCategory();
-
-      if (!code) {
-        showToast("Could not extract code from the editor", "error");
-        isProcessing = false;
-        return;
-      }
-
-      if (!problemName) {
-        showToast("Could not detect problem name", "error");
-        isProcessing = false;
-        return;
-      }
-
-      showToast(`Syncing "${problemName}" to GitHub...`, "info");
-
-      // Build payload matching the SyncPayload interface from the backend
-      const payload = {
-        problemName,
-        slug,
-        difficulty,
-        language,
-        code,
-        category,
-      };
-
-      // Send to background script for API submission
-      const response = await chrome.runtime.sendMessage({
-        type: "SYNC_SOLUTION",
-        payload,
-      });
-
-      if (response?.success) {
-        const status = response.data?.status || "SUCCESS";
-        if (status === "SKIPPED") {
-          showToast(`"${problemName}" already synced (identical code)`, "warning");
-        } else {
-          showToast(`"${problemName}" synced to GitHub!`, "success");
-        }
-      } else {
-        const errorMsg = response?.error || "Sync failed";
-        showToast(errorMsg, "error");
-      }
-    } catch (error) {
-      console.error("CodeSync: Sync error", error);
-      showToast("Sync failed — check your connection", "error");
-    } finally {
-      isProcessing = false;
-    }
-  }
-
-  // ─── DOM Mutation Observer ───────────────────────────────────────────────
-
-  const debouncedCheck = debounce(() => {
-    if (checkForAcceptedSubmission()) {
-      console.log("CodeSync: Accepted submission detected!");
-      handleAcceptedSubmission();
-    }
-  }, 1000);
-
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      // Check added nodes for the "Accepted" result
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          if (isAcceptedResult(node)) {
-            console.log("CodeSync: Accepted result node detected!");
-            handleAcceptedSubmission();
-            return;
-          }
-        }
-      }
-
-      // Also check for text changes in existing nodes
-      if (mutation.type === "characterData" || mutation.type === "childList") {
-        const target = mutation.target;
-        if (target && isAcceptedResult(target)) {
-          handleAcceptedSubmission();
-          return;
-        }
-      }
-    }
-
-    // Fallback: general page scan after DOM changes
-    debouncedCheck();
+    // Show immediate "syncing" toast
+    showToast('syncing', problemName);
   });
 
-  // Start observing once the page is ready
-  function startObserving() {
-    const targetNode = document.querySelector("#app") || document.body;
-    observer.observe(targetNode, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-    console.log("CodeSync: Observing for accepted submissions");
+  // Listen for sync result from background (badge update → toast)
+  chrome.runtime.onMessage.addListener(function (msg) {
+    if (msg.type === 'SYNC_RESULT') {
+      if (msg.status === 'SUCCESS') {
+        showToast('success', msg.problemName, msg.commitUrl);
+      } else if (msg.status === 'SKIPPED') {
+        showToast('skipped', msg.problemName);
+      } else if (msg.status === 'ERROR') {
+        showToast('error', msg.problemName, null, msg.error);
+      }
+    }
+  });
+
+  // ─── Page metadata extraction ─────────────────────────────────────────────
+
+  function getSlugFromUrl() {
+    var m = window.location.href.match(/\/problems\/([^/?#]+)/);
+    return m ? m[1] : null;
   }
 
-  // Wait for the LeetCode app to mount
-  if (document.querySelector("#app")) {
-    startObserving();
-  } else {
-    const readyObserver = new MutationObserver(() => {
-      if (document.querySelector("#app")) {
-        readyObserver.disconnect();
-        startObserving();
+  function getPageTitle() {
+    // Modern LeetCode 2024+ selectors
+    var selectors = [
+      '[data-cypress="question-title"]',
+      '.text-title-large a',
+      'a[href*="/problems/"] .text-title-large',
+      '[class*="title"] a',
+      'div[class*="question-title"]',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (el && el.textContent.trim()) {
+        return el.textContent.trim().replace(/^\d+\.\s*/, '');
       }
-    });
-    readyObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    // Fallback: humanize slug
+    var slug = getSlugFromUrl();
+    if (slug) {
+      return slug.split('-').map(function (w) {
+        return w.charAt(0).toUpperCase() + w.slice(1);
+      }).join(' ');
+    }
+    return 'Unknown Problem';
   }
+
+  function getPageDifficulty() {
+    var easy   = document.querySelector('.text-difficulty-easy, [class*="difficulty-easy"]');
+    var medium = document.querySelector('.text-difficulty-medium, [class*="difficulty-medium"]');
+    var hard   = document.querySelector('.text-difficulty-hard, [class*="difficulty-hard"]');
+    if (easy)   return 'Easy';
+    if (medium) return 'Medium';
+    if (hard)   return 'Hard';
+    return 'Unknown';
+  }
+
+  function getPageLang() {
+    // Language selector button (headlessui listbox)
+    var btn = document.querySelector('button[id^="headlessui-listbox-button"] span');
+    if (btn && btn.textContent.trim()) return btn.textContent.trim().toLowerCase();
+    // Monaco editor data-mode-id attribute
+    var monaco = document.querySelector('.monaco-editor');
+    if (monaco && monaco.getAttribute('data-mode-id')) return monaco.getAttribute('data-mode-id');
+    return 'python3';
+  }
+
+  // ─── Toast notification system ────────────────────────────────────────────
+
+  var toastRoot = null;
+  var TOAST_DISMISS_MS = 7000;
+
+  var TOAST_STYLES = {
+    syncing: { color: '#6366f1', label: '⟳ Syncing to GitHub…',     bar: '#6366f1' },
+    success: { color: '#22c55e', label: '✓ Synced to GitHub',        bar: '#22c55e' },
+    skipped: { color: '#eab308', label: '⊘ Already synced',          bar: '#eab308' },
+    error:   { color: '#ef4444', label: '✗ Sync failed',             bar: '#ef4444' },
+  };
+
+  function getToastRoot() {
+    if (toastRoot && document.body.contains(toastRoot)) return toastRoot;
+    toastRoot = document.createElement('div');
+    toastRoot.style.cssText = [
+      'position:fixed', 'bottom:20px', 'right:20px', 'z-index:2147483647',
+      'display:flex', 'flex-direction:column-reverse', 'gap:8px',
+      'pointer-events:none',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+    ].join(';');
+    document.body.appendChild(toastRoot);
+    return toastRoot;
+  }
+
+  function showToast(type, problemName, commitUrl, errorMsg) {
+    var st   = TOAST_STYLES[type] || TOAST_STYLES.syncing;
+    var root = getToastRoot();
+
+    var card = document.createElement('div');
+    card.style.cssText = [
+      'pointer-events:all', 'position:relative', 'width:300px',
+      'background:rgba(13,15,20,0.96)',
+      'backdrop-filter:blur(20px)', '-webkit-backdrop-filter:blur(20px)',
+      'border:1px solid ' + st.color + '44',
+      'border-radius:12px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.55)',
+      'overflow:hidden',
+      'transform:translateX(110%)', 'opacity:0',
+      'transition:transform 0.3s cubic-bezier(0.22,1,0.36,1),opacity 0.2s ease',
+    ].join(';');
+
+    // Progress bar
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:absolute;bottom:0;left:0;height:2px;width:100%;background:' + st.bar + ';transform-origin:left;transition:transform ' + TOAST_DISMISS_MS + 'ms linear;';
+    card.appendChild(bar);
+
+    // Body
+    var body = document.createElement('div');
+    body.style.cssText = 'padding:12px 14px 14px;';
+
+    var header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;';
+
+    var lbl = document.createElement('span');
+    lbl.style.cssText = 'font-size:12px;font-weight:700;color:' + st.color + ';';
+    lbl.textContent = st.label;
+
+    var close = document.createElement('button');
+    close.style.cssText = 'background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;line-height:1;padding:0;';
+    close.textContent = '×';
+    close.onclick = function () { dismiss(card); };
+
+    header.appendChild(lbl);
+    header.appendChild(close);
+    body.appendChild(header);
+
+    if (problemName) {
+      var name = document.createElement('div');
+      name.style.cssText = 'font-size:13px;font-weight:600;color:rgba(255,255,255,0.9);line-height:1.4;';
+      name.textContent = problemName;
+      body.appendChild(name);
+    }
+
+    if (errorMsg) {
+      var err = document.createElement('div');
+      err.style.cssText = 'margin-top:6px;padding:6px 8px;border-radius:6px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);font-size:11px;font-family:monospace;color:rgba(239,68,68,0.85);word-break:break-all;';
+      err.textContent = errorMsg;
+      body.appendChild(err);
+    }
+
+    if (commitUrl) {
+      var link = document.createElement('a');
+      link.href = commitUrl; link.target = '_blank'; link.rel = 'noopener';
+      link.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-top:8px;font-size:11px;font-weight:600;color:' + st.color + ';text-decoration:none;';
+      link.textContent = 'View commit on GitHub →';
+      body.appendChild(link);
+    }
+
+    card.appendChild(body);
+    root.appendChild(card);
+
+    // Animate in
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        card.style.transform = 'translateX(0)';
+        card.style.opacity   = '1';
+        bar.style.transform  = 'scaleX(0)';
+      });
+    });
+
+    var t = setTimeout(function () { dismiss(card); }, TOAST_DISMISS_MS);
+    card._csTimer = t;
+  }
+
+  function dismiss(card) {
+    if (!card) return;
+    clearTimeout(card._csTimer);
+    card.style.transform = 'translateX(110%)';
+    card.style.opacity   = '0';
+    setTimeout(function () { if (card.parentNode) card.parentNode.removeChild(card); }, 350);
+  }
+
 })();

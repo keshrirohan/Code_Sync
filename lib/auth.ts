@@ -12,7 +12,6 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GITHUB_CLIENT_SECRET!,
       authorization: {
         params: {
-          // "repo" scope lets us create repos and commit files on behalf of the user
           scope: "read:user user:email repo",
         },
       },
@@ -41,19 +40,49 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = user.id;
 
-        // Fetch GitHub username and access token from the Account record
-        const account = await prisma.account.findFirst({
-          where: { userId: user.id, provider: "github" },
-          select: { access_token: true },
-        });
+        // Fetch access token + githubUsername together in one query
+        const [account, dbUser] = await Promise.all([
+          prisma.account.findFirst({
+            where: { userId: user.id, provider: "github" },
+            select: { access_token: true },
+          }),
+          prisma.user.findUnique({
+            where: { id: user.id },
+            select: { githubUsername: true, githubId: true },
+          }),
+        ]);
 
-        const dbUser = await prisma.user.findUnique({
-          where: { id: user.id },
-          select: { githubUsername: true },
-        });
-
-        session.user.githubUsername = dbUser?.githubUsername;
         session.accessToken = account?.access_token ?? undefined;
+
+        if (dbUser?.githubUsername) {
+          // Happy path — already stored
+          session.user.githubUsername = dbUser.githubUsername;
+        } else if (account?.access_token) {
+          // Fallback: fetch from GitHub API and persist for next time
+          try {
+            const ghRes = await fetch("https://api.github.com/user", {
+              headers: {
+                Authorization: `Bearer ${account.access_token}`,
+                "User-Agent": "CodeSync",
+              },
+            });
+            if (ghRes.ok) {
+              const ghUser = await ghRes.json() as { login: string; id: number };
+              if (ghUser.login) {
+                await prisma.user.update({
+                  where: { id: user.id },
+                  data: {
+                    githubUsername: ghUser.login,
+                    githubId: String(ghUser.id),
+                  },
+                });
+                session.user.githubUsername = ghUser.login;
+              }
+            }
+          } catch {
+            // Non-fatal — session still works without username
+          }
+        }
       }
       return session;
     },
@@ -61,7 +90,6 @@ export const authOptions: NextAuthOptions = {
 
   events: {
     async createUser({ user }) {
-      // When a new user signs up, create default settings
       await prisma.settings.create({
         data: {
           userId: user.id,
@@ -71,19 +99,19 @@ export const authOptions: NextAuthOptions = {
     },
 
     async linkAccount({ account, profile }) {
-      // Store the GitHub username on the User record
       if (account.provider === "github" && profile) {
         const githubProfile = profile as unknown as { login?: string; id?: number };
-        await prisma.user.update({
-          where: { id: account.userId },
-          data: {
-            githubId: String(githubProfile.id),
-            githubUsername: githubProfile.login,
-          },
-        });
+        if (githubProfile.login) {
+          await prisma.user.update({
+            where: { id: account.userId },
+            data: {
+              githubId: String(githubProfile.id),
+              githubUsername: githubProfile.login,
+            },
+          });
+        }
       }
     },
-
   },
 
   pages: {

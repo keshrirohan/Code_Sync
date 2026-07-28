@@ -84,8 +84,10 @@ export interface SyncHistoryItem {
   slug: string;
   difficulty: string;
   language: string;
+  category: string;
   status: SyncStatus;
   commitUrl: string | null;
+  errorMsg?: string | null;
   syncedAt: string;
 }
 

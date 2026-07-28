@@ -49,8 +49,10 @@ export default async function DashboardPage() {
     slug: s.slug,
     difficulty: s.difficulty,
     language: s.language,
+    category: s.category,
     status: s.status as SyncHistoryItem["status"],
     commitUrl: s.commitUrl,
+    errorMsg: s.errorMsg,
     syncedAt: s.syncedAt.toISOString(),
   }));
 

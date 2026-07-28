@@ -10,6 +10,7 @@ import {
   LogOut,
   Code2,
   ChevronRight,
+  Bug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,11 @@ const navItems = [
     label: "Settings",
     href: "/dashboard/settings",
     icon: Settings,
+  },
+  {
+    label: "Debug",
+    href: "/dashboard/debug",
+    icon: Bug,
   },
 ];
 
@@ -64,6 +70,11 @@ export default function Sidebar() {
             >
               <item.icon className={cn("w-4.5 h-4.5", isActive && "text-primary")} />
               {item.label}
+              {item.href === "/dashboard/debug" && !isActive && (
+                <span className="ml-auto text-[9px] font-bold px-1 py-0.5 rounded bg-muted text-muted-foreground/70 uppercase tracking-wide">
+                  dev
+                </span>
+              )}
               {isActive && (
                 <ChevronRight className="w-3.5 h-3.5 ml-auto text-primary/50" />
               )}

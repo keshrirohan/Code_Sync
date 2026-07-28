@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { handleOptions, withCors } from "@/lib/cors";
 import {
   commitFile,
   getFileContent,
@@ -9,29 +11,65 @@ import {
   buildCommitMessage,
   hashCode,
 } from "@/lib/github";
-import type { SyncPayload, SyncResult, ApiResponse } from "@/types";
+import type { SyncResult, ApiResponse } from "@/types";
+
+// ─── Zod schema ───────────────────────────────────────────────────────────────
+
+const syncPayloadSchema = z.object({
+  problemName: z.string().min(1, "problemName is required"),
+  slug: z.string().min(1, "slug is required"),
+  difficulty: z.string().default("Unknown"),
+  language: z.string().min(1, "language is required"),
+  code: z.string().min(1, "code is required"),
+  category: z.string().default("Uncategorized"),
+});
+
+// ─── CORS preflight ───────────────────────────────────────────────────────────
+
+export async function OPTIONS(request: NextRequest) {
+  return handleOptions(request);
+}
+
+// ─── POST /api/sync ───────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   try {
     // 1. Validate session
     const session = await getServerSession(authOptions);
     if (!session?.user?.id || !session.accessToken) {
-      return NextResponse.json<ApiResponse<SyncResult>>(
-        { success: false, error: "Unauthorized. Please sign in." },
-        { status: 401 }
+      return withCors(request,
+        NextResponse.json<ApiResponse<SyncResult>>(
+          { success: false, error: "Unauthorized. Please sign in at the CodeSync web app." },
+          { status: 401 }
+        )
       );
     }
 
-    // 2. Parse and validate payload
-    const body = (await request.json()) as SyncPayload;
-    const { problemName, slug, difficulty, language, code, category } = body;
-
-    if (!problemName || !slug || !language || !code) {
-      return NextResponse.json<ApiResponse<SyncResult>>(
-        { success: false, error: "Missing required fields: problemName, slug, language, code." },
-        { status: 400 }
+    // 2. Parse + validate body with Zod
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return withCors(request,
+        NextResponse.json<ApiResponse<SyncResult>>(
+          { success: false, error: "Invalid JSON body." },
+          { status: 400 }
+        )
       );
     }
+
+    const parsed = syncPayloadSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((i) => i.message).join(", ");
+      return withCors(request,
+        NextResponse.json<ApiResponse<SyncResult>>(
+          { success: false, error: `Invalid payload: ${msg}` },
+          { status: 400 }
+        )
+      );
+    }
+
+    const { problemName, slug, difficulty, language, code, category } = parsed.data;
 
     // 3. Get user's selected repository
     const settings = await prisma.settings.findUnique({
@@ -39,15 +77,17 @@ export async function POST(request: NextRequest) {
     });
 
     if (!settings?.selectedRepoFullName) {
-      return NextResponse.json<ApiResponse<SyncResult>>(
-        { success: false, error: "No repository selected. Please select a repository in Settings." },
-        { status: 400 }
+      return withCors(request,
+        NextResponse.json<ApiResponse<SyncResult>>(
+          { success: false, error: "No repository selected. Please pick one in Settings." },
+          { status: 400 }
+        )
       );
     }
 
     const [owner, repo] = settings.selectedRepoFullName.split("/");
 
-    // 4. Check for duplicate (same slug + language + same code hash)
+    // 4. Deduplication — hash the code, look up last successful sync
     const codeHashValue = hashCode(code);
 
     const existingSync = await prisma.syncHistory.findFirst({
@@ -61,17 +101,9 @@ export async function POST(request: NextRequest) {
     });
 
     if (existingSync && existingSync.codeHash === codeHashValue) {
-      // Code hasn't changed — skip
-      const skipResult: SyncResult = {
-        status: "SKIPPED",
-        message: "Solution already synced with identical code.",
-        commitUrl: existingSync.commitUrl ?? undefined,
-      };
-
       await prisma.syncHistory.create({
         data: {
-          problemName,
-          slug,
+          problemName, slug,
           difficulty: difficulty || "Unknown",
           language: language.toLowerCase(),
           category: category || "Uncategorized",
@@ -82,22 +114,26 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      return NextResponse.json<ApiResponse<SyncResult>>({
-        success: true,
-        data: skipResult,
-      });
+      return withCors(request,
+        NextResponse.json<ApiResponse<SyncResult>>({
+          success: true,
+          data: {
+            status: "SKIPPED",
+            message: "Solution already synced with identical code.",
+            commitUrl: existingSync.commitUrl ?? undefined,
+          },
+        })
+      );
     }
 
-    // 5. Build file path and check if file exists on GitHub
+    // 5. Build file path + get existing blob SHA (for update commits)
     const filePath = buildFilePath(category || "Uncategorized", problemName, language);
     const isUpdate = !!existingSync;
 
     let fileSha: string | undefined;
     try {
       const existing = await getFileContent(session.accessToken, owner, repo, filePath);
-      if (existing) {
-        fileSha = existing.sha;
-      }
+      if (existing) fileSha = existing.sha;
     } catch {
       // File doesn't exist yet — that's fine
     }
@@ -114,11 +150,10 @@ export async function POST(request: NextRequest) {
       fileSha
     );
 
-    // 7. Record sync history
+    // 7. Record success
     const syncRecord = await prisma.syncHistory.create({
       data: {
-        problemName,
-        slug,
+        problemName, slug,
         difficulty: difficulty || "Unknown",
         language: language.toLowerCase(),
         category: category || "Uncategorized",
@@ -129,48 +164,52 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const result: SyncResult = {
-      status: "SUCCESS",
-      message: isUpdate
-        ? `Updated "${problemName}" solution.`
-        : `Synced "${problemName}" to GitHub.`,
-      commitUrl: commitResult.commitUrl,
-      syncHistoryId: syncRecord.id,
-    };
+    return withCors(request,
+      NextResponse.json<ApiResponse<SyncResult>>({
+        success: true,
+        data: {
+          status: "SUCCESS",
+          message: isUpdate
+            ? `Updated "${problemName}" solution.`
+            : `Synced "${problemName}" to GitHub.`,
+          commitUrl: commitResult.commitUrl,
+          syncHistoryId: syncRecord.id,
+        },
+      })
+    );
 
-    return NextResponse.json<ApiResponse<SyncResult>>({ success: true, data: result });
   } catch (error) {
     console.error("[SYNC_ERROR]", error);
 
-    // Record failed sync if we have enough context
+    // Best-effort failure record
     try {
       const session = await getServerSession(authOptions);
-      const body = (await request.clone().json()) as Partial<SyncPayload>;
-      if (session?.user?.id && body.slug) {
+      const rawBody = await request.clone().json() as Record<string, unknown>;
+      if (session?.user?.id && typeof rawBody.slug === "string") {
         await prisma.syncHistory.create({
           data: {
-            problemName: body.problemName || "Unknown",
-            slug: body.slug,
-            difficulty: body.difficulty || "Unknown",
-            language: (body.language || "unknown").toLowerCase(),
-            category: body.category || "Uncategorized",
-            codeHash: body.code ? hashCode(body.code) : "",
+            problemName: typeof rawBody.problemName === "string" ? rawBody.problemName : "Unknown",
+            slug: rawBody.slug,
+            difficulty: typeof rawBody.difficulty === "string" ? rawBody.difficulty : "Unknown",
+            language: typeof rawBody.language === "string" ? rawBody.language.toLowerCase() : "unknown",
+            category: typeof rawBody.category === "string" ? rawBody.category : "Uncategorized",
+            codeHash: typeof rawBody.code === "string" ? hashCode(rawBody.code) : "",
             status: "FAILED",
             errorMsg: error instanceof Error ? error.message : "Unknown error",
             userId: session.user.id,
           },
         });
       }
-    } catch {
-      // Ignore errors during error recording
-    }
+    } catch { /* ignore recording errors */ }
 
-    return NextResponse.json<ApiResponse<SyncResult>>(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Sync failed. Please try again.",
-      },
-      { status: 500 }
+    return withCors(request,
+      NextResponse.json<ApiResponse<SyncResult>>(
+        {
+          success: false,
+          error: error instanceof Error ? error.message : "Sync failed. Please try again.",
+        },
+        { status: 500 }
+      )
     );
   }
 }

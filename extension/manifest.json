@@ -2,32 +2,33 @@
     "manifest_version": 3,
     "name": "CodeSync",
     "description": "Automatically sync your accepted LeetCode solutions to GitHub",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "permissions": [
         "storage",
-        "activeTab"
+        "unlimitedStorage",
+        "alarms",
+        "notifications"
     ],
     "host_permissions": [
         "https://leetcode.com/*",
-        "https://leetcode.cn/*",
-        "http://localhost:3000/*",
-        "https://YOUR_PRODUCTION_DOMAIN/*"
+        "https://api.github.com/*"
     ],
+    "background": {
+        "service_worker": "background.js"
+    },
     "content_scripts": [
         {
             "matches": [
                 "https://leetcode.com/problems/*"
             ],
             "js": [
-                "utils.js",
+                "storage.js",
+                "leetcode-parser.js",
                 "content.js"
             ],
             "run_at": "document_idle"
         }
     ],
-    "background": {
-        "service_worker": "background.js"
-    },
     "action": {
         "default_popup": "popup.html",
         "default_icon": {
@@ -40,5 +41,11 @@
         "16": "icons/icon16.png",
         "48": "icons/icon48.png",
         "128": "icons/icon128.png"
-    }
+    },
+    "web_accessible_resources": [
+        {
+            "resources": ["injected.js"],
+            "matches": ["https://leetcode.com/*"]
+        }
+    ]
 }
