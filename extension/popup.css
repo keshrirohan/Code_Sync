@@ -110,6 +110,30 @@ body {
 .help-link:hover { color: var(--primary); }
 .help-link code { background: var(--bg3); padding: 1px 5px; border-radius: 4px; }
 
+/* ─── Permissions / grants list ─────────────────────────────────────────────── */
+.connect-grants {
+  background: rgba(99,102,241,.07); border: 1px solid rgba(99,102,241,.18);
+  border-radius: var(--radius-sm); padding: 10px 14px; margin: 14px 0 10px;
+}
+.grants-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: rgba(99,102,241,.8); margin-bottom: 6px; }
+.grants-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.grants-list li { font-size: 12px; color: var(--text2); }
+
+/* ─── PAT fallback (details/summary) ────────────────────────────────────────── */
+.pat-fallback {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0; overflow: hidden; margin-top: 8px;
+}
+.pat-fallback summary {
+  padding: 9px 12px; font-size: 12px; font-weight: 500; color: var(--text2);
+  cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 6px;
+  transition: background .15s;
+}
+.pat-fallback summary:hover { background: var(--bg3); }
+.pat-fallback summary::before { content: '▸'; font-size: 10px; transition: transform .2s; }
+.pat-fallback[open] summary::before { transform: rotate(90deg); }
+.pat-fallback-body { padding: 0 12px 12px; }
+
 /* ─── Forms ─────────────────────────────────────────────────────────────────── */
 .form-group { margin-bottom: 12px; }
 .form-label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -170,6 +194,16 @@ body {
   border: 1px solid var(--border-md);
 }
 .btn-secondary:hover:not(:disabled) { background: #20232e; color: var(--text); }
+
+/* GitHub OAuth primary button */
+.btn-oauth {
+  background: #24292e; color: #fff; gap: 10px;
+  border: 1px solid #444c56;
+  box-shadow: 0 2px 8px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.05) inset;
+  font-size: 14px; padding: 11px 16px;
+}
+.btn-oauth:hover { background: #2d333b; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+.btn-oauth:active { transform: scale(0.98); }
 
 .btn + .btn { margin-top: 8px; }
 
