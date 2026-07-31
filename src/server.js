@@ -29,6 +29,18 @@ const PORT = 3055;
 // In-memory job store — Map<jobId, { status, logs, sseClients, startedAt }>
 const jobs = new Map();
 
+// In-memory OAuth state store — Map<state, { createdAt }> (CSRF protection)
+const oauthStates = new Map();
+const CALLBACK_URL = `http://localhost:${3055}/api/auth/github/callback`;
+
+// Purge states older than 10 minutes every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [k, v] of oauthStates) {
+    if (v.createdAt < cutoff) oauthStates.delete(k);
+  }
+}, 5 * 60 * 1000);
+
 // ── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(express.json());
@@ -164,7 +176,126 @@ app.delete('/api/auth/github', async (req, res) => {
   }
 });
 
+// ── API: GitHub OAuth ─────────────────────────────────────────────────────────
+// These routes implement the GitHub OAuth Web Application Flow.
+// Users register a GitHub OAuth App once, enter the Client ID + Secret in the
+// dashboard, and after that just click "Sign in with GitHub".
+
+// GET /api/auth/github/oauth-status — is OAuth configured? is user connected?
+app.get('/api/auth/github/oauth-status', async (req, res) => {
+  try {
+    const cfg = await loadConfig();
+    res.json({
+      configured: !!(cfg.githubOAuthClientId && cfg.githubOAuthClientSecret),
+      connected:  !!cfg.githubToken,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/auth/github/oauth-setup — save Client ID + Secret entered by user
+app.post('/api/auth/github/oauth-setup', async (req, res) => {
+  const { clientId, clientSecret } = req.body;
+  if (!clientId || !clientSecret)
+    return res.status(400).json({ error: 'Both clientId and clientSecret are required' });
+  try {
+    const cfg = await loadConfig();
+    cfg.githubOAuthClientId     = clientId.trim();
+    cfg.githubOAuthClientSecret = clientSecret.trim();
+    await saveConfig(cfg);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/auth/github/login — redirect to GitHub's OAuth consent screen
+app.get('/api/auth/github/login', async (req, res) => {
+  try {
+    const cfg = await loadConfig();
+    if (!cfg.githubOAuthClientId || !cfg.githubOAuthClientSecret)
+      return res.status(400).send('GitHub OAuth is not configured. Set up Client ID + Secret first.');
+
+    const state = crypto.randomUUID();
+    oauthStates.set(state, { createdAt: Date.now() });
+
+    const params = new URLSearchParams({
+      client_id:    cfg.githubOAuthClientId,
+      redirect_uri: CALLBACK_URL,
+      scope:        'repo',
+      state,
+    });
+
+    res.redirect(`https://github.com/login/oauth/authorize?${params}`);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// GET /api/auth/github/callback — GitHub redirects here after user approves
+app.get('/api/auth/github/callback', async (req, res) => {
+  const { code, state, error: ghError } = req.query;
+
+  // GitHub sent an error (e.g. user clicked Cancel)
+  if (ghError) return res.redirect(`/?gh_error=${encodeURIComponent(ghError)}`);
+
+  // CSRF check
+  if (!state || !oauthStates.has(state))
+    return res.redirect('/?gh_error=invalid_state');
+  oauthStates.delete(state);
+
+  try {
+    const cfg = await loadConfig();
+
+    // Exchange the temporary code for an access token
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        client_id:     cfg.githubOAuthClientId,
+        client_secret: cfg.githubOAuthClientSecret,
+        code,
+        redirect_uri: CALLBACK_URL,
+      }),
+    });
+
+    const tokenData = await tokenRes.json();
+    if (tokenData.error)
+      throw new Error(tokenData.error_description || tokenData.error);
+
+    const accessToken = tokenData.access_token;
+
+    // Fetch the user's profile
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!userRes.ok) throw new Error('Failed to fetch GitHub user info');
+    const user = await userRes.json();
+
+    // Persist the token and user info
+    cfg.githubToken    = accessToken;
+    cfg.githubUsername = user.login;
+    cfg.githubAvatar   = user.avatar_url;
+    await saveConfig(cfg);
+
+    // Redirect back to the dashboard — the ?gh_connected param triggers a
+    // success toast and auto-navigation to the Repository page
+    res.redirect('/?gh_connected=1');
+  } catch (err) {
+    res.redirect(`/?gh_error=${encodeURIComponent(err.message)}`);
+  }
+});
+
 // ── API: Repositories ────────────────────────────────────────────────────────
+
 
 app.get('/api/repos', async (req, res) => {
   try {
