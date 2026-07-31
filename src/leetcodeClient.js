@@ -1,0 +1,347 @@
+// ============================================================================
+// leetcodeClient.js — Talks to LeetCode's GraphQL API.
+//
+// This file handles ALL communication with LeetCode. It has three small
+// functions (one per API query) and one orchestrator that combines them.
+//
+// Every request needs these headers:
+//   - Cookie:     Your session cookie so LeetCode knows who you are
+//   - User-Agent: LeetCode blocks requests that don't look like a real browser
+//   - Referer:    LeetCode's CSRF protection requires this header
+//   - Content-Type: We're sending JSON (GraphQL queries)
+// ============================================================================
+
+import fetch from "node-fetch";
+
+// The single GraphQL endpoint for all LeetCode API queries
+const LEETCODE_API_URL = "https://leetcode.com/graphql";
+
+/**
+ * buildHeaders — Creates the HTTP headers needed for every LeetCode request.
+ *
+ * Input:  cookie (string) — the user's LeetCode session cookie
+ * Output: an object with all required headers
+ *
+ * Why each header matters:
+ *   Cookie      → authenticates the request (tells LeetCode who the user is)
+ *   User-Agent  → LeetCode rejects requests without a browser-like User-Agent
+ *   Referer     → LeetCode's CSRF protection checks this matches leetcode.com
+ *   Content-Type→ we're sending a JSON body containing a GraphQL query
+ */
+function buildHeaders(cookie) {
+  return {
+    "Content-Type": "application/json",
+    Cookie: cookie,
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Referer: "https://leetcode.com",
+  };
+}
+
+/**
+ * sleep — Pauses execution for a given number of milliseconds.
+ *
+ * Input:  ms (number) — how long to wait
+ * Output: a Promise that resolves after `ms` milliseconds
+ *
+ * Used between retries and between API calls to avoid rate limiting.
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ============================================================================
+// FUNCTION 1: Fetch the list of all solved questions
+// ============================================================================
+
+/**
+ * fetchSolvedQuestions — Gets the list of ALL questions the user has solved.
+ *
+ * Input:  cookie (string) — the user's LeetCode session cookie
+ * Output: array of objects, each with { id, title, titleSlug, lastSubmittedAt }
+ *
+ * How it works:
+ *   - Calls the "userProgressQuestionList" GraphQL query
+ *   - This query supports pagination (skip + limit), so we loop until we've
+ *     fetched all questions
+ *   - We request 100 questions per page to minimize the number of API calls
+ */
+async function fetchSolvedQuestions(cookie) {
+  const allQuestions = [];
+  let skip = 0;
+  const limit = 100; // How many questions to fetch per page
+  let hasMore = true;
+
+  console.log("Fetching your solved questions from LeetCode...");
+
+  while (hasMore) {
+    const query = `
+      query userProgressQuestionList {
+        userProgressQuestionList(
+          filters: { status: ACCEPTED }
+          limit: ${limit}
+          skip: ${skip}
+        ) {
+          totalNum
+          questions {
+            frontendQuestionId
+            title
+            titleSlug
+            lastSubmittedAt
+          }
+        }
+      }
+    `;
+
+    const response = await fetch(LEETCODE_API_URL, {
+      method: "POST",
+      headers: buildHeaders(cookie),
+      body: JSON.stringify({ query }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch solved questions (HTTP ${response.status}). ` +
+          "Is your cookie valid?"
+      );
+    }
+
+    const data = await response.json();
+    const result = data.data.userProgressQuestionList;
+    const questions = result.questions;
+    const totalNum = result.totalNum;
+
+    // Add each question to our list
+    for (const q of questions) {
+      allQuestions.push({
+        id: q.frontendQuestionId,
+        title: q.title,
+        titleSlug: q.titleSlug,
+        lastSubmittedAt: q.lastSubmittedAt,
+      });
+    }
+
+    skip += limit;
+
+    // Stop when we've fetched all questions
+    if (skip >= totalNum || questions.length === 0) {
+      hasMore = false;
+    }
+
+    // Small delay between pages to be polite to LeetCode's servers
+    if (hasMore) {
+      await sleep(500);
+    }
+  }
+
+  console.log(`Found ${allQuestions.length} solved questions.`);
+  return allQuestions;
+}
+
+// ============================================================================
+// FUNCTION 2: Fetch the latest accepted submission ID for a specific question
+// ============================================================================
+
+/**
+ * fetchLatestSubmissionId — Gets the submission ID of the most recent accepted
+ *                           submission for a given question.
+ *
+ * Input:  cookie (string), titleSlug (string) — e.g. "two-sum"
+ * Output: the submission ID (number) of the latest accepted submission,
+ *         or null if no accepted submission exists
+ *
+ * We use the "questionSubmissionList" query and filter for ACCEPTED status.
+ * We only need the first result (limit: 1) since they come in newest-first order.
+ */
+async function fetchLatestSubmissionId(cookie, titleSlug) {
+  const query = `
+    query questionSubmissionList {
+      questionSubmissionList(
+        questionSlug: "${titleSlug}"
+        status: 10
+        limit: 1
+        offset: 0
+      ) {
+        submissions {
+          id
+          lang
+        }
+      }
+    }
+  `;
+  // status: 10 means ACCEPTED in LeetCode's internal numbering
+
+  const response = await fetch(LEETCODE_API_URL, {
+    method: "POST",
+    headers: buildHeaders(cookie),
+    body: JSON.stringify({ query }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch submissions for "${titleSlug}" (HTTP ${response.status})`
+    );
+  }
+
+  const data = await response.json();
+  const submissions = data.data.questionSubmissionList.submissions;
+
+  // If the user has no accepted submissions for this question, return null
+  if (!submissions || submissions.length === 0) {
+    return null;
+  }
+
+  // Return the first (latest) accepted submission's ID and language
+  return {
+    submissionId: submissions[0].id,
+    lang: submissions[0].lang,
+  };
+}
+
+// ============================================================================
+// FUNCTION 3: Fetch the actual code for a specific submission
+// ============================================================================
+
+/**
+ * fetchSubmissionCode — Gets the actual source code of a specific submission.
+ *
+ * Input:  cookie (string), submissionId (number)
+ * Output: the code string
+ *
+ * IMPORTANT: LeetCode's API is FLAKY for this endpoint. It sometimes returns
+ * empty data or errors randomly. So we wrap this in a retry loop:
+ *   - Try up to 5 times
+ *   - Wait 1 second between retries
+ *   - If all 5 retries fail, throw an error
+ */
+async function fetchSubmissionCode(cookie, submissionId) {
+  const MAX_RETRIES = 5;
+  const RETRY_DELAY_MS = 1000; // 1 second between retries
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const query = `
+        query submissionDetails {
+          submissionDetails(submissionId: ${submissionId}) {
+            code
+          }
+        }
+      `;
+
+      const response = await fetch(LEETCODE_API_URL, {
+        method: "POST",
+        headers: buildHeaders(cookie),
+        body: JSON.stringify({ query }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Sometimes LeetCode returns a valid HTTP response but with null data
+      if (!data.data || !data.data.submissionDetails) {
+        throw new Error("Empty response from LeetCode");
+      }
+
+      const code = data.data.submissionDetails.code;
+
+      if (!code) {
+        throw new Error("Code field is empty");
+      }
+
+      return code; // Success! Return the code.
+    } catch (error) {
+      // If this was our last attempt, give up
+      if (attempt === MAX_RETRIES) {
+        throw new Error(
+          `Failed to fetch code for submission ${submissionId} after ` +
+            `${MAX_RETRIES} retries. Last error: ${error.message}`
+        );
+      }
+
+      // Otherwise, wait and try again
+      console.log(
+        `  Retry ${attempt}/${MAX_RETRIES} for submission ${submissionId}` +
+          ` (${error.message})`
+      );
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+}
+
+// ============================================================================
+// ORCHESTRATOR: Combine all three functions to get complete submission data
+// ============================================================================
+
+/**
+ * fetchAllSubmissions — Fetches ALL data for every solved question.
+ *
+ * Input:  cookie (string) — the user's LeetCode session cookie
+ * Output: array of complete submission objects:
+ *         [{ id, title, titleSlug, lastSubmittedAt, lang, code }]
+ *
+ * How it works:
+ *   Step 1: Get the list of all solved questions
+ *   Step 2: For EACH question, fetch its latest submission ID and language
+ *   Step 3: For EACH submission ID, fetch the actual code
+ *
+ * We add a small delay (300ms) between questions to avoid hammering
+ * LeetCode's API and getting rate-limited.
+ */
+async function fetchAllSubmissions(cookie) {
+  // Step 1: Get all solved questions
+  const questions = await fetchSolvedQuestions(cookie);
+
+  const allSubmissions = [];
+
+  // Step 2 & 3: For each question, get the submission ID, then the code
+  for (let i = 0; i < questions.length; i++) {
+    const question = questions[i];
+
+    console.log(
+      `Fetching submission ${i + 1}/${questions.length}: ${question.title}...`
+    );
+
+    // Step 2: Get the latest accepted submission ID
+    const submissionInfo = await fetchLatestSubmissionId(
+      cookie,
+      question.titleSlug
+    );
+
+    // Some questions might not have accepted submissions (edge case)
+    if (!submissionInfo) {
+      console.log(`  Skipping "${question.title}" — no accepted submission found`);
+      continue;
+    }
+
+    // Step 3: Get the actual code
+    const code = await fetchSubmissionCode(cookie, submissionInfo.submissionId);
+
+    allSubmissions.push({
+      id: question.id,
+      title: question.title,
+      titleSlug: question.titleSlug,
+      lastSubmittedAt: question.lastSubmittedAt,
+      lang: submissionInfo.lang,
+      code: code,
+    });
+
+    // Small delay between questions to avoid rate limiting
+    await sleep(300);
+  }
+
+  console.log(
+    `\nSuccessfully fetched ${allSubmissions.length} submissions.\n`
+  );
+  return allSubmissions;
+}
+
+export {
+  fetchSolvedQuestions,
+  fetchLatestSubmissionId,
+  fetchSubmissionCode,
+  fetchAllSubmissions,
+};

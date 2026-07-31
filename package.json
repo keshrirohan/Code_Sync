@@ -1,0 +1,20 @@
+{
+  "name": "codesync",
+  "version": "1.0.0",
+  "description": "Sync your LeetCode submissions into a Git repo with original timestamps",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+  },
+  "keywords": ["leetcode", "git", "sync"],
+  "license": "MIT",
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "@jest/globals": "^29.7.0"
+  }
+}
