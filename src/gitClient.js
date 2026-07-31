@@ -55,6 +55,12 @@ function init(repoUrl) {
   execSync(`git clone "${repoUrl}" "${REPO_DIR}"`, {
     stdio: "inherit", // Show git's output so user can see clone progress
   });
+
+  // Configure a local git user so commits work on machines without a global
+  // user.name / user.email set up.
+  execSync('git config user.email "codesync@local.dev"', { cwd: REPO_DIR, stdio: "pipe" });
+  execSync('git config user.name "CodeSync"',            { cwd: REPO_DIR, stdio: "pipe" });
+
   console.log("Clone complete.\n");
 }
 

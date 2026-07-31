@@ -6,11 +6,16 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "dashboard": "node src/server.js",
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "dev:server": "node src/server.js",
+    "dev:frontend": "cd frontend && npm run dev",
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
-  "keywords": ["leetcode", "git", "sync"],
+  "keywords": ["leetcode", "git", "sync", "dashboard"],
   "license": "MIT",
   "dependencies": {
+    "express": "^4.19.2",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {

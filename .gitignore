@@ -1,2 +1,9 @@
 node_modules/
 codesync_repo/
+
+# Dashboard persistent storage (contains credentials - never commit!)
+data/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/

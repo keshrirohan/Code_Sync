@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CodeSync</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 320px;
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0a0a12;
+      color: #f4f4f5;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 20px 20px 16px;
+      background: linear-gradient(135deg, rgba(124,58,237,0.15), rgba(16,185,129,0.08));
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 16px rgba(124,58,237,0.4);
+      flex-shrink: 0;
+    }
+
+    .header-text h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+    .header-text p  { font-size: 11px; color: #71717a; margin-top: 1px; }
+
+    /* ── Status ── */
+    .status-section {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .status-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #52525b;
+      margin-bottom: 10px;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.03);
+      margin-bottom: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-connected { background: #10b981; box-shadow: 0 0 6px #10b981; }
+    .dot-disconnected { background: #52525b; }
+    .dot-loading {
+      background: #f59e0b;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-name { font-size: 12px; font-weight: 500; flex: 1; }
+    .status-value { font-size: 11px; color: #a1a1aa; }
+    .status-value.ok { color: #34d399; }
+
+    /* ── Main Action ── */
+    .action-section { padding: 16px 20px; }
+
+    .btn {
+      width: 100%;
+      padding: 11px 16px;
+      border: none;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      margin-bottom: 8px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed, #6d28d9);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(124,58,237,0.35);
+    }
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(124,58,237,0.45);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.05);
+      color: #a1a1aa;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.08); color: #f4f4f5; }
+
+    /* ── Toast ── */
+    .toast {
+      margin: 0 20px 16px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+    .toast.show { display: flex; }
+    .toast.success { background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); color: #34d399; }
+    .toast.error   { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3); color: #f87171; }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 12px 20px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      text-align: center;
+    }
+    .footer a {
+      font-size: 11px;
+      color: #52525b;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .footer a:hover { color: #a78bfa; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">⚡</div>
+    <div class="header-text">
+      <h1>CodeSync</h1>
+      <p>LeetCode → GitHub Sync</p>
+    </div>
+  </div>
+
+  <div class="status-section">
+    <div class="status-label">Connection Status</div>
+
+    <div class="status-item">
+      <div class="status-dot dot-loading" id="lc-dot"></div>
+      <span class="status-name">LeetCode</span>
+      <span class="status-value" id="lc-status">Checking...</span>
+    </div>
+
+    <div class="status-item">
+      <div class="status-dot dot-loading" id="dash-dot"></div>
+      <span class="status-name">Dashboard</span>
+      <span class="status-value" id="dash-status">Checking...</span>
+    </div>
+  </div>
+
+  <div class="action-section">
+    <button class="btn btn-primary" id="send-btn" disabled>
+      <span>⚡</span>
+      <span id="send-label">Send Cookie to Dashboard</span>
+    </button>
+    <button class="btn btn-secondary" id="open-btn">
+      <span>🌐</span>
+      Open Dashboard
+    </button>
+  </div>
+
+  <div class="toast" id="toast">
+    <span id="toast-icon"></span>
+    <span id="toast-msg"></span>
+  </div>
+
+  <div class="footer">
+    <a href="http://localhost:3055" target="_blank">Open CodeSync Dashboard ↗</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
