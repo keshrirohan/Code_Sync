@@ -1,18 +1,20 @@
-# 🔄 CodeSync
+# ⚡ CodeSync
 
-Sync your LeetCode submissions into a Git repository — with the **original submission timestamps** as commit dates. Your GitHub contribution graph will show green squares on the days you actually solved the problems.
+Sync your LeetCode submissions into a GitHub repository — with the **original submission timestamps** as commit dates. Your contribution graph will show green squares on the days you actually solved the problems.
+
+Now with a **full web dashboard** and **Chrome extension** — no more copy-pasting cookies from DevTools.
 
 ---
 
 ## 📋 Table of Contents
 
 - [How It Works](#how-it-works)
+- [What's New — Dashboard & Extension](#whats-new--dashboard--extension)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Getting Your LeetCode Cookie](#getting-your-leetcode-cookie)
-- [Usage](#usage)
-- [Flags](#flags)
-- [Examples](#examples)
+- [Usage: Web Dashboard (Recommended)](#usage-web-dashboard-recommended)
+- [Usage: CLI](#usage-cli)
+- [Chrome Extension](#chrome-extension)
 - [Project Structure](#project-structure)
 - [Running Tests](#running-tests)
 - [FAQ](#faq)
@@ -22,10 +24,10 @@ Sync your LeetCode submissions into a Git repository — with the **original sub
 ## How It Works
 
 ```
-┌──────────────┐     fetch all      ┌──────────────┐     commit each     ┌──────────────┐
-│   LeetCode   │ ──────────────────>│   CodeSync   │ ──────────────────> │  Your GitHub  │
-│   Account    │   solved problems  │   (this CLI) │   with original     │     Repo      │
-└──────────────┘                    └──────────────┘   timestamps        └──────────────┘
+┌──────────────┐   fetch all    ┌──────────────┐   commit each   ┌──────────────┐
+│   LeetCode   │ ─────────────> │   CodeSync   │ ─────────────-> │  Your GitHub │
+│   Account    │  submissions   │  (CLI / UI)  │  w/ original    │     Repo     │
+└──────────────┘                └──────────────┘   timestamps    └──────────────┘
 ```
 
 1. **Fetches** all your accepted submissions from LeetCode's GraphQL API
@@ -33,15 +35,36 @@ Sync your LeetCode submissions into a Git repository — with the **original sub
 3. **Commits** each submission as a separate file, using the original LeetCode timestamp
 4. **Pushes** all commits to your remote repo in one go
 
-Each submission becomes a folder like `1 Two Sum/` with a file like `1-two-sum.py` inside.
+Each submission becomes a folder like `1 Two Sum/` containing a file like `1-two-sum.py`.
+
+---
+
+## What's New — Dashboard & Extension
+
+### 🖥️ Web Dashboard (`npm run dashboard`)
+
+A dark-mode React dashboard served at **http://localhost:3055**:
+
+| Section | What you do |
+|---------|-------------|
+| **Connect** | Paste your LeetCode cookie and GitHub PAT once — they're saved locally |
+| **Repository** | Browse and search all your GitHub repos, pick the target |
+| **Sync** | One-click sync with a live terminal showing real-time progress |
+| **History** | Full log of every sync run — date, repo, status, duration |
+
+### 🧩 Chrome Extension (`extension/`)
+
+Load the extension in developer mode and it:
+- Reads your `LEETCODE_SESSION` + `csrftoken` cookies **automatically** (no DevTools)
+- Sends them to the dashboard with one click
 
 ---
 
 ## Prerequisites
 
-- **Node.js** (v18 or later) — [Download here](https://nodejs.org/)
-- **Git** installed and available in your terminal — [Download here](https://git-scm.com/)
-- A **GitHub/GitLab repository** you can push to (HTTPS or SSH)
+- **Node.js** v18 or later — [Download](https://nodejs.org/)
+- **Git** installed and available in your terminal — [Download](https://git-scm.com/)
+- A **GitHub repository** to push to (HTTPS or SSH)
 - A **LeetCode account** with solved problems
 
 ---
@@ -55,127 +78,87 @@ cd codesync
 
 # 2. Install dependencies
 npm install
-```
 
-That's it — no global installs, no build step.
+# 3. Build the frontend (first time only)
+npm run build:frontend
+```
 
 ---
 
-## Getting Your LeetCode Cookie
+## Usage: Web Dashboard (Recommended)
 
-CodeSync needs your LeetCode session cookie to access your submissions. Here's how to get it:
+### Step 1 — Start the server
 
-### Step-by-step (Chrome)
-
-1. Go to [leetcode.com](https://leetcode.com) and **log in**
-2. Press **F12** (or right-click → Inspect) to open DevTools
-3. Click the **Application** tab (or **Storage** in Firefox)
-4. In the left sidebar, expand **Cookies** → click `https://leetcode.com`
-5. Find these two cookies:
-   - `LEETCODE_SESSION` — a long string starting with `eyJ...`
-   - `csrftoken` — a shorter alphanumeric string
-6. Copy both values
-
-Your cookie string should look like:
-
-```
-LEETCODE_SESSION=eyJhbGciOiJIUzI1NiJ9...; csrftoken=abc123def456
+```bash
+npm run dashboard
 ```
 
-> ⚠️ **Keep your cookie secret!** It gives full access to your LeetCode account. Never commit it to a repo or share it publicly.
+Open **http://localhost:3055** in your browser.
+
+### Step 2 — Connect LeetCode
+
+Either:
+
+**A) Use the Chrome Extension** (easiest — see [Chrome Extension](#chrome-extension) below)
+
+**B) Paste the cookie manually:**
+1. Go to [leetcode.com](https://leetcode.com) and log in
+2. Open DevTools (F12) → **Application** → **Cookies** → `https://leetcode.com`
+3. Copy `LEETCODE_SESSION` and `csrftoken` values
+4. Paste into the dashboard as: `LEETCODE_SESSION=eyJ...; csrftoken=abc123`
+
+### Step 3 — Connect GitHub
+
+1. Go to [GitHub → Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens/new?description=CodeSync&scopes=repo)
+2. Create a token with **`repo`** scope
+3. Paste it in the **GitHub** card on the Connect page
+
+### Step 4 — Choose a Repository
+
+Go to the **Repository** tab, search your repos, select one, and click **Save Selection**.
+
+### Step 5 — Sync!
+
+Go to the **Sync** tab and click **⚡ Start Sync**.
+
+Watch live progress in the terminal window. When done, check your **GitHub repo** for new commits and your **History** tab for a record of the run.
+
+> **Dry Run mode**: Toggle "Dry Run" to preview what would be committed without touching your repo.
 
 ---
 
-## Usage
+## Usage: CLI
+
+The original CLI is still available and works exactly as before:
 
 ```bash
 node src/index.js --cookie "<your-cookie>" --repo-url "<your-repo-url>"
 ```
 
-### Minimal example
-
-```bash
-node src/index.js \
-  --cookie "LEETCODE_SESSION=eyJhbG...; csrftoken=abc123" \
-  --repo-url "https://github.com/yourname/leetcode-solutions.git"
-```
-
----
-
-## Flags
+### Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--cookie <string>` | ✅ Yes | Your LeetCode session cookie (see [Getting Your Cookie](#getting-your-leetcode-cookie)) |
-| `--repo-url <string>` | ✅ Yes | Git repo URL to push commits to (HTTPS or SSH) |
-| `--dry-run` | No | Fetch and print submissions without creating any commits |
-| `--help` / `-h` | No | Show usage information |
+| `--cookie <string>` | ✅ Yes | Your LeetCode session cookie |
+| `--repo-url <string>` | ✅ Yes | Git repo URL to push commits to |
+| `--dry-run` | No | Preview without committing |
+| `--help` / `-h` | No | Show usage info |
 
----
-
-## Examples
-
-### 🔍 Dry run (preview without committing)
-
-See what would be committed without touching your repo:
+### Examples
 
 ```bash
+# Full sync
+node src/index.js \
+  --cookie "LEETCODE_SESSION=eyJ...; csrftoken=abc123" \
+  --repo-url "https://github.com/yourname/leetcode-solutions.git"
+
+# Dry run (preview only)
 node src/index.js \
   --cookie "LEETCODE_SESSION=eyJ...; csrftoken=abc123" \
   --repo-url "https://github.com/yourname/leetcode-solutions.git" \
   --dry-run
-```
 
-Output:
-
-```
-=== Phase 1: Fetching submissions from LeetCode ===
-Fetching your solved questions from LeetCode...
-Found 42 solved questions.
-Fetching submission 1/42: Two Sum...
-...
-
-=== DRY RUN — Showing what would be committed ===
-  1. Two Sum (python3 → .py)
-     Submitted: 2024-01-15T10:30:00.000Z
-     Code preview: class Solution:  def twoSum(self, nums...
-  ...
-Total: 42 submissions.
-```
-
-### 🚀 Full sync
-
-```bash
-node src/index.js \
-  --cookie "LEETCODE_SESSION=eyJ...; csrftoken=abc123" \
-  --repo-url "https://github.com/yourname/leetcode-solutions.git"
-```
-
-Output:
-
-```
-=== Phase 1: Fetching submissions from LeetCode ===
-Found 42 solved questions.
-...
-
-=== Phase 2: Setting up Git repository ===
-Cloning https://github.com/yourname/leetcode-solutions.git into codesync_repo...
-
-=== Phase 3: Creating commits ===
-  Committed 1/42: Two Sum
-  Committed 2/42: Add Two Numbers
-  ...
-  Committed 42/42: Median of Two Sorted Arrays
-
-=== Phase 4: Pushing to remote ===
-Push complete!
-
-✅ CodeSync complete! All submissions have been synced.
-```
-
-### 🔑 Using SSH instead of HTTPS
-
-```bash
+# SSH repo URL
 node src/index.js \
   --cookie "LEETCODE_SESSION=eyJ...; csrftoken=abc123" \
   --repo-url "git@github.com:yourname/leetcode-solutions.git"
@@ -183,33 +166,93 @@ node src/index.js \
 
 ---
 
+## Chrome Extension
+
+### Loading the extension
+
+1. Open **Chrome** → go to `chrome://extensions`
+2. Enable **Developer mode** (toggle in the top-right)
+3. Click **Load unpacked** → select the `extension/` folder from this repo
+4. The CodeSync ⚡ icon appears in your toolbar
+
+### Using the extension
+
+1. Go to [leetcode.com](https://leetcode.com) and make sure you're logged in
+2. Click the **CodeSync extension icon** in your toolbar
+3. The popup shows:
+   - ✅ **LeetCode** — green if you're logged in to LeetCode
+   - ✅ **Dashboard** — green if `npm run dashboard` is running
+4. Click **"Send Cookie to Dashboard"** — done!
+
+The dashboard's Connect page will instantly show your LeetCode account as connected.
+
+---
+
+## NPM Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run dashboard` | Start the web dashboard at http://localhost:3055 |
+| `npm run build:frontend` | Build the React frontend (run once after install) |
+| `npm run dev:frontend` | Start Vite dev server with hot reload (proxy → port 3055) |
+| `npm start` | Run the CLI directly |
+| `npm test` | Run unit tests |
+
+---
+
 ## Project Structure
 
 ```
 codesync/
-├── package.json              # Project config + dependencies
-├── .gitignore                # Ignores node_modules/ and temp clone folder
-├── README.md                 # You are here!
-├── src/
-│   ├── index.js              # Entry point (just wiring, ~12 lines)
-│   ├── config.js             # Parses CLI flags + validates inputs
-│   ├── leetcodeClient.js     # LeetCode GraphQL API calls
-│   ├── gitClient.js          # Git operations (clone, commit, push)
-│   └── handler.js            # Orchestrator — wires everything together
-└── tests/
-    ├── handler.test.js       # Tests for the orchestrator (mocked deps)
-    └── config.test.js        # Tests for CLI argument parsing
+├── package.json               # Root config + scripts
+├── .gitignore
+├── README.md
+│
+├── src/                       # Core backend
+│   ├── index.js               # CLI entry point
+│   ├── config.js              # CLI argument parser
+│   ├── handler.js             # Orchestrator (fetch → commit → push)
+│   ├── leetcodeClient.js      # LeetCode GraphQL API client
+│   ├── gitClient.js           # Git operations (clone, commit, push)
+│   ├── server.js              # Express API server + SSE streaming  ← NEW
+│   └── storage.js             # Atomic JSON persistence             ← NEW
+│
+├── frontend/                  # React dashboard (Vite)              ← NEW
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── index.css          # Dark glassmorphism design system
+│   │   └── components/
+│   │       ├── Sidebar.jsx
+│   │       ├── ConnectSection.jsx
+│   │       ├── RepoSection.jsx
+│   │       ├── SyncSection.jsx
+│   │       └── HistorySection.jsx
+│   ├── index.html
+│   ├── vite.config.js
+│   └── package.json
+│
+├── extension/                 # Chrome Extension (MV3)              ← NEW
+│   ├── manifest.json
+│   ├── popup.html
+│   ├── popup.js
+│   └── icon*.png
+│
+├── tests/
+│   ├── handler.test.js
+│   └── config.test.js
+│
+└── data/                      # Auto-created, gitignored
+    └── config.json            # Stored credentials + history
 ```
 
-### What each file does
+### What each new file does
 
 | File | Responsibility |
 |------|----------------|
-| `index.js` | Wires config → handler. Under 15 lines. |
-| `config.js` | Reads `--cookie`, `--repo-url`, `--dry-run` from the command line. Validates required flags. |
-| `leetcodeClient.js` | Makes 3 types of GraphQL queries to LeetCode: solved questions list, submission IDs, and submission code. Has retry logic for flaky endpoints. |
-| `gitClient.js` | Runs `git clone`, `git add`, `git commit`, `git push` as shell commands. Sets both author-date and committer-date so GitHub's green squares work. |
-| `handler.js` | The "brain" — fetches all data first, then commits each submission, then pushes once at the end. |
+| `src/server.js` | Express server — serves the React app, exposes REST API, streams sync progress via SSE |
+| `src/storage.js` | Reads/writes `data/config.json` and `data/history.json` atomically |
+| `frontend/` | Vite + React single-page app with 4 sections: Connect, Repository, Sync, History |
+| `extension/` | Chrome MV3 extension that reads LeetCode cookies and POSTs them to the local server |
 
 ---
 
@@ -224,38 +267,42 @@ npx jest tests/handler.test.js
 npx jest tests/config.test.js
 ```
 
-> Note: Tests use mocked LeetCode and Git clients — they never make real API calls or touch git.
+Tests use mocked LeetCode and Git clients — they never make real API calls.
 
 ---
 
 ## FAQ
 
-### Why do I need a cookie? Can't I use my username/password?
+### Why do I need a cookie? Can't I use username/password?
 
-LeetCode doesn't have a public API with OAuth. The session cookie is the only way to authenticate API requests. It's the same approach used by other LeetCode tools like leetcode-cli and leetsync.
+LeetCode doesn't have a public OAuth API. The session cookie is the only way to authenticate. The Chrome extension makes grabbing it completely painless.
 
-### How long does it take?
+### Why a Personal Access Token (PAT) for GitHub? No OAuth?
 
-Depends on how many problems you've solved. Each submission requires 2-3 API calls, with small delays between them to avoid rate limiting. Expect roughly **1-2 seconds per submission** (e.g., ~1-2 minutes for 50 problems).
+A PAT is simpler — no GitHub App registration, no callback URL, no client secrets. Generate one with `repo` scope in 30 seconds. The token is stored only in `data/config.json` on your local machine (gitignored).
+
+### How long does a full sync take?
+
+About **1–2 seconds per submission** due to polite delays between API calls. ~50 problems takes around 1–2 minutes.
 
 ### Will it duplicate commits if I run it again?
 
-Currently, yes — it will create new commits for all submissions each time. For a first version, it's best to run it once against an **empty repository**. Future versions could track already-synced submissions.
+Currently yes — re-running creates new commits for all submissions. Best practice: run it once against an **empty repository**. Future versions will track already-synced submissions.
 
-### My cookie expired! What do I do?
+### My cookie expired. What do I do?
 
-LeetCode cookies expire after a while. Just log in again and grab a fresh cookie using the same steps in [Getting Your Cookie](#getting-your-leetcode-cookie).
+Log in to LeetCode again and either use the Chrome extension to re-send, or paste a fresh cookie in the Connect section.
 
-### Why does it clone the repo fresh each time?
+### Where is my data stored? Is it secure?
 
-To keep things simple and avoid merge conflicts. The cloned folder is automatically deleted after pushing.
+Credentials are stored in `data/config.json` on your local machine. This folder is gitignored and never committed. The server only runs locally — nothing is sent to any external service by CodeSync itself.
 
 ### What languages are supported?
 
 All LeetCode languages are mapped to file extensions:
 
-| LeetCode Language | File Extension |
-|-------------------|---------------|
+| LeetCode Language | Extension |
+|-------------------|-----------|
 | python / python3 | `.py` |
 | javascript | `.js` |
 | typescript | `.ts` |
