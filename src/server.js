@@ -61,16 +61,23 @@ app.use(express.static(FRONTEND_DIST));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function extractCsrfToken(cookie) {
+  const match = cookie.match(/csrftoken=([^;]+)/);
+  return match ? match[1].trim() : '';
+}
+
 async function validateLeetcodeCookie(cookie) {
   const res = await fetch('https://leetcode.com/graphql', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Cookie: cookie,
+      'x-csrftoken': extractCsrfToken(cookie),
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
         '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Referer: 'https://leetcode.com',
+      Origin:  'https://leetcode.com',
     },
     body: JSON.stringify({ query: 'query { userStatus { username isSignedIn } }' }),
   });
@@ -78,6 +85,7 @@ async function validateLeetcodeCookie(cookie) {
   const data = await res.json();
   return data?.data?.userStatus;
 }
+
 
 // ── API: Config ──────────────────────────────────────────────────────────────
 

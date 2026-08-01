@@ -17,27 +17,45 @@ import fetch from "node-fetch";
 const LEETCODE_API_URL = "https://leetcode.com/graphql";
 
 /**
+ * extractCsrfToken — Pulls the csrftoken value out of a cookie string.
+ *
+ * LeetCode's GraphQL endpoint requires the CSRF token to be sent as BOTH:
+ *   1. Part of the Cookie header  (e.g. "csrftoken=abc123")
+ *   2. A standalone x-csrftoken request header (value: "abc123")
+ *
+ * Without the header, POST requests return HTTP 400 even if the cookie is valid.
+ */
+function extractCsrfToken(cookie) {
+  const match = cookie.match(/csrftoken=([^;]+)/);
+  return match ? match[1].trim() : "";
+}
+
+/**
  * buildHeaders — Creates the HTTP headers needed for every LeetCode request.
  *
  * Input:  cookie (string) — the user's LeetCode session cookie
  * Output: an object with all required headers
  *
  * Why each header matters:
- *   Cookie      → authenticates the request (tells LeetCode who the user is)
- *   User-Agent  → LeetCode rejects requests without a browser-like User-Agent
- *   Referer     → LeetCode's CSRF protection checks this matches leetcode.com
- *   Content-Type→ we're sending a JSON body containing a GraphQL query
+ *   Cookie       → authenticates the request (tells LeetCode who the user is)
+ *   x-csrftoken  → LeetCode's CSRF protection for POST requests (must match cookie)
+ *   User-Agent   → LeetCode rejects requests without a browser-like User-Agent
+ *   Referer      → Additional CSRF check — must be the leetcode.com origin
+ *   Content-Type → we're sending a JSON body containing a GraphQL query
  */
 function buildHeaders(cookie) {
   return {
     "Content-Type": "application/json",
     Cookie: cookie,
+    "x-csrftoken": extractCsrfToken(cookie),
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     Referer: "https://leetcode.com",
+    Origin: "https://leetcode.com",
   };
 }
+
 
 /**
  * sleep — Pauses execution for a given number of milliseconds.
