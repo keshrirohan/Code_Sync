@@ -100,9 +100,9 @@ function commit(folderName, fileName, code, message, timestamp) {
   const filePath = path.join(folderPath, fileName);
   fs.writeFileSync(filePath, code, "utf-8");
 
-  // Convert Unix timestamp (seconds) to an ISO 8601 date string
-  // Git accepts ISO 8601 format like "2024-01-15T10:30:00Z"
-  const dateString = new Date(timestamp * 1000).toISOString();
+  // lastSubmittedAt is now an ISO 8601 string (e.g. "2026-08-01T08:26:00+00:00").
+  // new Date() accepts it directly — no * 1000 needed.
+  const dateString = new Date(timestamp).toISOString();
 
   // Stage all changes
   execSync("git add .", { cwd: repoPath, stdio: "pipe" });

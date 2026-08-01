@@ -104,7 +104,8 @@ async function execute(config) {
     console.log("=== DRY RUN — Showing what would be committed ===\n");
     for (const sub of submissions) {
       const ext = getFileExtension(sub.lang);
-      const date = new Date(sub.lastSubmittedAt * 1000).toISOString();
+      // lastSubmittedAt is now an ISO 8601 string (e.g. "2026-08-01T08:26:00+00:00")
+      const date = new Date(sub.lastSubmittedAt).toISOString();
       console.log(`  ${sub.id}. ${sub.title} (${sub.lang} → .${ext})`);
       console.log(`     Submitted: ${date}`);
       console.log(`     Code preview: ${sub.code.substring(0, 80)}...`);
@@ -124,7 +125,7 @@ async function execute(config) {
 
   // Sort submissions by timestamp (oldest first) so commits appear in
   // chronological order in the git log
-  submissions.sort((a, b) => a.lastSubmittedAt - b.lastSubmittedAt);
+  submissions.sort((a, b) => new Date(a.lastSubmittedAt) - new Date(b.lastSubmittedAt));
 
   for (let i = 0; i < submissions.length; i++) {
     const sub = submissions[i];
