@@ -77,84 +77,63 @@ function sleep(ms) {
  * fetchSolvedQuestions — Gets the list of ALL questions the user has solved.
  *
  * Input:  cookie (string) — the user's LeetCode session cookie
- * Output: array of objects, each with { id, title, titleSlug, lastSubmittedAt }
+ * Output: array of objects, each with { title, titleSlug, lastSubmittedAt }
  *
- * How it works:
- *   - Calls the "userProgressQuestionList" GraphQL query
- *   - This query supports pagination (skip + limit), so we loop until we've
- *     fetched all questions
- *   - We request 100 questions per page to minimize the number of API calls
+ * NOTE: LeetCode updated their schema in mid-2026.
+ *   - "userProgressQuestionList" no longer accepts filters/limit/skip args.
+ *   - "frontendQuestionId" was removed from UserProgressQuestionNode.
+ *   - The query now returns ALL solved questions in a single call (no pagination).
+ *   - The frontend question number ("1.", "2.") is fetched in Step 2 via
+ *     submissionDetails → question.questionId.
  */
 async function fetchSolvedQuestions(cookie) {
-  const allQuestions = [];
-  let skip = 0;
-  const limit = 100; // How many questions to fetch per page
-  let hasMore = true;
-
   console.log("Fetching your solved questions from LeetCode...");
 
-  while (hasMore) {
-    const query = `
-      query userProgressQuestionList {
-        userProgressQuestionList(
-          filters: { status: ACCEPTED }
-          limit: ${limit}
-          skip: ${skip}
-        ) {
-          totalNum
-          questions {
-            frontendQuestionId
-            title
-            titleSlug
-            lastSubmittedAt
-          }
+  // LeetCode now returns all solved questions in one shot — no args needed.
+  const query = `
+    query userProgressQuestionList {
+      userProgressQuestionList {
+        questions {
+          title
+          titleSlug
+          lastSubmittedAt
         }
       }
-    `;
-
-    const response = await fetch(LEETCODE_API_URL, {
-      method: "POST",
-      headers: buildHeaders(cookie),
-      body: JSON.stringify({ query }),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch solved questions (HTTP ${response.status}). ` +
-          "Is your cookie valid?"
-      );
     }
+  `;
 
-    const data = await response.json();
-    const result = data.data.userProgressQuestionList;
-    const questions = result.questions;
-    const totalNum = result.totalNum;
+  const response = await fetch(LEETCODE_API_URL, {
+    method: "POST",
+    headers: buildHeaders(cookie),
+    body: JSON.stringify({ query }),
+  });
 
-    // Add each question to our list
-    for (const q of questions) {
-      allQuestions.push({
-        id: q.frontendQuestionId,
-        title: q.title,
-        titleSlug: q.titleSlug,
-        lastSubmittedAt: q.lastSubmittedAt,
-      });
-    }
-
-    skip += limit;
-
-    // Stop when we've fetched all questions
-    if (skip >= totalNum || questions.length === 0) {
-      hasMore = false;
-    }
-
-    // Small delay between pages to be polite to LeetCode's servers
-    if (hasMore) {
-      await sleep(500);
-    }
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch solved questions (HTTP ${response.status}). ` +
+        "Is your cookie valid?"
+    );
   }
 
-  console.log(`Found ${allQuestions.length} solved questions.`);
-  return allQuestions;
+  const data = await response.json();
+
+  if (data.errors) {
+    throw new Error(
+      `GraphQL error: ${data.errors.map((e) => e.message).join("; ")}`
+    );
+  }
+
+  const questions = data.data.userProgressQuestionList.questions;
+
+  console.log(`Found ${questions.length} solved questions.`);
+
+  // Return without id — it will be populated in fetchAllSubmissions via submissionDetails
+  return questions.map((q) => ({
+    id: null, // filled in later from submissionDetails.question.questionId
+    title: q.title,
+    titleSlug: q.titleSlug,
+    lastSubmittedAt: q.lastSubmittedAt,
+  }));
 }
 
 // ============================================================================
@@ -233,16 +212,35 @@ async function fetchLatestSubmissionId(cookie, titleSlug) {
  *   - Wait 1 second between retries
  *   - If all 5 retries fail, throw an error
  */
-async function fetchSubmissionCode(cookie, submissionId) {
+/**
+ * fetchSubmissionDetails — Gets the code AND the frontend question number
+ *                          for a specific submission.
+ *
+ * Returns { code, questionId } where questionId is the human-visible number
+ * (e.g. "1" for Two Sum). This replaces the old fetchSubmissionCode because
+ * we now also need questionId here since userProgressQuestionList no longer
+ * returns frontendQuestionId.
+ *
+ * NOTE: "frontendQuestionId" was removed from QuestionNode in mid-2026.
+ *       Use "questionId" instead (same value).
+ */
+async function fetchSubmissionDetails(cookie, submissionId) {
   const MAX_RETRIES = 5;
-  const RETRY_DELAY_MS = 1000; // 1 second between retries
+  const RETRY_DELAY_MS = 1000;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const query = `
-        query submissionDetails {
-          submissionDetails(submissionId: ${submissionId}) {
+        query submissionDetails($submissionId: Int!) {
+          submissionDetails(submissionId: $submissionId) {
             code
+            lang { name verboseName }
+            question {
+              questionId
+              title
+              titleSlug
+            }
+            timestamp
           }
         }
       `;
@@ -250,7 +248,7 @@ async function fetchSubmissionCode(cookie, submissionId) {
       const response = await fetch(LEETCODE_API_URL, {
         method: "POST",
         headers: buildHeaders(cookie),
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, variables: { submissionId: Number(submissionId) } }),
       });
 
       if (!response.ok) {
@@ -259,28 +257,28 @@ async function fetchSubmissionCode(cookie, submissionId) {
 
       const data = await response.json();
 
-      // Sometimes LeetCode returns a valid HTTP response but with null data
       if (!data.data || !data.data.submissionDetails) {
         throw new Error("Empty response from LeetCode");
       }
 
-      const code = data.data.submissionDetails.code;
+      const details = data.data.submissionDetails;
 
-      if (!code) {
+      if (!details.code) {
         throw new Error("Code field is empty");
       }
 
-      return code; // Success! Return the code.
+      return {
+        code:       details.code,
+        lang:       details.lang?.name || "unknown",
+        questionId: details.question?.questionId || null,
+      };
     } catch (error) {
-      // If this was our last attempt, give up
       if (attempt === MAX_RETRIES) {
         throw new Error(
-          `Failed to fetch code for submission ${submissionId} after ` +
+          `Failed to fetch details for submission ${submissionId} after ` +
             `${MAX_RETRIES} retries. Last error: ${error.message}`
         );
       }
-
-      // Otherwise, wait and try again
       console.log(
         `  Retry ${attempt}/${MAX_RETRIES} for submission ${submissionId}` +
           ` (${error.message})`
@@ -310,12 +308,12 @@ async function fetchSubmissionCode(cookie, submissionId) {
  * LeetCode's API and getting rate-limited.
  */
 async function fetchAllSubmissions(cookie) {
-  // Step 1: Get all solved questions
+  // Step 1: Get all solved questions (title, titleSlug, lastSubmittedAt)
   const questions = await fetchSolvedQuestions(cookie);
 
   const allSubmissions = [];
 
-  // Step 2 & 3: For each question, get the submission ID, then the code
+  // Step 2 & 3: For each question, get the latest submission ID, then full details
   for (let i = 0; i < questions.length; i++) {
     const question = questions[i];
 
@@ -323,31 +321,30 @@ async function fetchAllSubmissions(cookie) {
       `Fetching submission ${i + 1}/${questions.length}: ${question.title}...`
     );
 
-    // Step 2: Get the latest accepted submission ID
+    // Step 2: Get the latest accepted submission ID + lang
     const submissionInfo = await fetchLatestSubmissionId(
       cookie,
       question.titleSlug
     );
 
-    // Some questions might not have accepted submissions (edge case)
     if (!submissionInfo) {
       console.log(`  Skipping "${question.title}" — no accepted submission found`);
       continue;
     }
 
-    // Step 3: Get the actual code
-    const code = await fetchSubmissionCode(cookie, submissionInfo.submissionId);
+    // Step 3: Get code + questionId (frontend question number) from submissionDetails
+    const details = await fetchSubmissionDetails(cookie, submissionInfo.submissionId);
 
     allSubmissions.push({
-      id: question.id,
-      title: question.title,
-      titleSlug: question.titleSlug,
+      id:              details.questionId || question.titleSlug, // fallback to slug if null
+      title:           question.title,
+      titleSlug:       question.titleSlug,
       lastSubmittedAt: question.lastSubmittedAt,
-      lang: submissionInfo.lang,
-      code: code,
+      lang:            details.lang || submissionInfo.lang,
+      code:            details.code,
     });
 
-    // Small delay between questions to avoid rate limiting
+    // Polite delay between questions to avoid rate limiting
     await sleep(300);
   }
 
@@ -360,6 +357,6 @@ async function fetchAllSubmissions(cookie) {
 export {
   fetchSolvedQuestions,
   fetchLatestSubmissionId,
-  fetchSubmissionCode,
+  fetchSubmissionDetails,
   fetchAllSubmissions,
 };
