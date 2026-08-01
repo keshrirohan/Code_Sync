@@ -186,8 +186,14 @@ export default function SyncSection({ config, isReady }) {
             <div className="toggle-knob" />
           </div>
           <div>
-            <div className="toggle-label">Dry Run</div>
-            <div className="toggle-sub">Preview without committing</div>
+            <div className="toggle-label">
+              {dryRun ? '🧪 Test Mode  ON' : '🧪 Test Mode'}
+            </div>
+            <div className="toggle-sub">
+              {dryRun
+                ? 'Will only show what would sync — nothing pushed to GitHub'
+                : 'Turn ON to safely test before pushing to GitHub'}
+            </div>
           </div>
         </label>
 
@@ -199,7 +205,7 @@ export default function SyncSection({ config, isReady }) {
           {syncing ? (
             <><span className="spinner" /> Syncing...</>
           ) : dryRun ? (
-            <>🔍 Preview Sync</>
+            <>🧪 Run Test (No Push)</>
           ) : (
             <>⚡ Start Sync</>
           )}
