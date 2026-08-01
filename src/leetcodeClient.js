@@ -74,66 +74,86 @@ function sleep(ms) {
 // ============================================================================
 
 /**
- * fetchSolvedQuestions — Gets the list of ALL questions the user has solved.
+ * fetchSolvedQuestions — Gets ALL unique questions the user has ever AC'd.
  *
- * Input:  cookie (string) — the user's LeetCode session cookie
- * Output: array of objects, each with { title, titleSlug, lastSubmittedAt }
+ * Strategy: paginate "submissionList" (server-side cap = 20 per page) with
+ * increasing offset, collect every unique accepted titleSlug, stop when a page
+ * has fewer than PAGE_SIZE results.
  *
- * NOTE: LeetCode updated their schema in mid-2026.
- *   - "userProgressQuestionList" no longer accepts filters/limit/skip args.
- *   - "frontendQuestionId" was removed from UserProgressQuestionNode.
- *   - The query now returns ALL solved questions in a single call (no pagination).
- *   - The frontend question number ("1.", "2.") is fetched in Step 2 via
- *     submissionDetails → question.questionId.
+ * Why not userProgressQuestionList?
+ *   — It has a hardcoded default of 10 results and accepts NO pagination args
+ *     (limit / skip / pageSize all rejected). It would miss the majority of
+ *     problems for any serious user.
+ *
+ * Why not recentAcSubmissionList?
+ *   — Hard-capped at 20 by the server regardless of the limit argument.
  */
 async function fetchSolvedQuestions(cookie) {
   console.log("Fetching your solved questions from LeetCode...");
 
-  // LeetCode now returns all solved questions in one shot — no args needed.
-  const query = `
-    query userProgressQuestionList {
-      userProgressQuestionList {
-        questions {
-          title
-          titleSlug
-          lastSubmittedAt
+  const seen      = new Set();  // titleSlugs already added (dedup)
+  const questions = [];
+  let   offset    = 0;
+  const PAGE_SIZE = 20;         // LeetCode caps submissionList at 20 per page
+
+  while (true) {
+    const query = `
+      query submissionList($offset: Int!, $limit: Int!) {
+        submissionList(offset: $offset, limit: $limit) {
+          submissions {
+            id
+            titleSlug
+            statusDisplay
+          }
         }
       }
+    `;
+
+    const response = await fetch(LEETCODE_API_URL, {
+      method: "POST",
+      headers: buildHeaders(cookie),
+      body: JSON.stringify({
+        query,
+        variables: { offset, limit: PAGE_SIZE },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch submissions (HTTP ${response.status}). ` +
+          "Is your cookie valid?"
+      );
     }
-  `;
 
-  const response = await fetch(LEETCODE_API_URL, {
-    method: "POST",
-    headers: buildHeaders(cookie),
-    body: JSON.stringify({ query }),
-  });
+    const data = await response.json();
+    if (data.errors) {
+      throw new Error(
+        `GraphQL error: ${data.errors.map((e) => e.message).join("; ")}`
+      );
+    }
 
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch solved questions (HTTP ${response.status}). ` +
-        "Is your cookie valid?"
-    );
+    const submissions = data.data.submissionList.submissions;
+    if (!submissions || submissions.length === 0) break;
+
+    for (const sub of submissions) {
+      if (sub.statusDisplay === "Accepted" && !seen.has(sub.titleSlug)) {
+        seen.add(sub.titleSlug);
+        questions.push({
+          id:              null, // filled later from submissionDetails.question.questionId
+          title:           null, // filled later from submissionDetails.question.title
+          titleSlug:       sub.titleSlug,
+          lastSubmittedAt: null, // filled later from submissionDetails.timestamp
+        });
+      }
+    }
+
+    if (submissions.length < PAGE_SIZE) break; // last page reached
+    offset += PAGE_SIZE;
+    await sleep(300); // be polite to LeetCode's servers
   }
-
-  const data = await response.json();
-
-  if (data.errors) {
-    throw new Error(
-      `GraphQL error: ${data.errors.map((e) => e.message).join("; ")}`
-    );
-  }
-
-  const questions = data.data.userProgressQuestionList.questions;
 
   console.log(`Found ${questions.length} solved questions.`);
-
-  // Return without id — it will be populated in fetchAllSubmissions via submissionDetails
-  return questions.map((q) => ({
-    id: null, // filled in later from submissionDetails.question.questionId
-    title: q.title,
-    titleSlug: q.titleSlug,
-    lastSubmittedAt: q.lastSubmittedAt,
-  }));
+  return questions;
 }
 
 // ============================================================================
@@ -268,9 +288,16 @@ async function fetchSubmissionDetails(cookie, submissionId) {
       }
 
       return {
-        code:       details.code,
-        lang:       details.lang?.name || "unknown",
-        questionId: details.question?.questionId || null,
+        code:            details.code,
+        lang:            details.lang?.name || "unknown",
+        questionId:      details.question?.questionId || null,
+        // title from the question node (so we don't need a separate query)
+        title:           details.question?.title || "",
+        // timestamp from submissionDetails is a Unix epoch integer (seconds)
+        // Convert to ISO 8601 string so handler.js / gitClient.js can use it directly
+        lastSubmittedAt: details.timestamp
+          ? new Date(details.timestamp * 1000).toISOString()
+          : new Date().toISOString(),
       };
     } catch (error) {
       if (attempt === MAX_RETRIES) {
@@ -332,14 +359,14 @@ async function fetchAllSubmissions(cookie) {
       continue;
     }
 
-    // Step 3: Get code + questionId (frontend question number) from submissionDetails
+    // Step 3: Get code, questionId, title, and original timestamp
     const details = await fetchSubmissionDetails(cookie, submissionInfo.submissionId);
 
     allSubmissions.push({
-      id:              details.questionId || question.titleSlug, // fallback to slug if null
-      title:           question.title,
+      id:              details.questionId || question.titleSlug,
+      title:           details.title      || question.titleSlug,
       titleSlug:       question.titleSlug,
-      lastSubmittedAt: question.lastSubmittedAt,
+      lastSubmittedAt: details.lastSubmittedAt, // ISO string from Unix*1000
       lang:            details.lang || submissionInfo.lang,
       code:            details.code,
     });
