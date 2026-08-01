@@ -154,4 +154,4 @@ async function execute(config) {
   console.log("✅ CodeSync complete! All submissions have been synced.");
 }
 
-export { execute };
+export { execute, getFileExtension, sanitizeFolderName };

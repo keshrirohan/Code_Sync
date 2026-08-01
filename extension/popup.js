@@ -127,6 +127,66 @@ openBtn.addEventListener('click', () => {
   chrome.tabs.create({ url: DASHBOARD_URL });
 });
 
+// ── Auto-sync toggle ──────────────────────────────────────────────────────────
+
+const autoToggle   = el('autosync-toggle');
+const autoSub      = el('autosync-sub');
+const intervalRow  = el('interval-row');
+const intervalSel  = el('interval-select');
+const asDotWrap    = el('as-dot-wrap');
+
+function renderAutoSyncState(enabled, intervalMinutes) {
+  autoToggle.checked = enabled;
+
+  if (enabled) {
+    // Pulsing green dot
+    asDotWrap.innerHTML = '<span class="pulse-dot"></span>';
+    autoSub.textContent  = `ON · Pushes on Accept · polls every ${intervalMinutes} min`;
+    autoSub.style.color  = '#4ade80';
+    intervalRow.style.display = 'flex';
+  } else {
+    asDotWrap.innerHTML  = '';
+    autoSub.textContent  = 'Push to GitHub automatically when LeetCode accepts your submission.';
+    autoSub.style.color  = '#52525b';
+    intervalRow.style.display = 'none';
+  }
+}
+
+async function loadAutoSyncState() {
+  const cfg = await chrome.storage.local.get(['autoSyncEnabled', 'autoSyncIntervalMinutes']);
+  const enabled  = cfg.autoSyncEnabled ?? false;
+  const interval = cfg.autoSyncIntervalMinutes ?? 10;
+  intervalSel.value = String(interval);
+  renderAutoSyncState(enabled, interval);
+}
+
+autoToggle.addEventListener('change', async () => {
+  const enabled  = autoToggle.checked;
+  const interval = parseInt(intervalSel.value, 10);
+  renderAutoSyncState(enabled, interval);
+  // Tell background service worker
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled, intervalMinutes: interval });
+  // Also tell the server so it can run its own server-side poll
+  fetch(`${DASHBOARD_URL}/api/sync/auto/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled, intervalMinutes: interval }),
+  }).catch(() => {});
+});
+
+intervalSel.addEventListener('change', () => {
+  if (!autoToggle.checked) return;
+  const interval = parseInt(intervalSel.value, 10);
+  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled: true, intervalMinutes: interval });
+  fetch(`${DASHBOARD_URL}/api/sync/auto/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: true, intervalMinutes: interval }),
+  }).catch(() => {});
+  renderAutoSyncState(true, interval);
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 init();
+loadAutoSyncState();

@@ -147,9 +147,81 @@
 
     /* ── Footer ── */
     .footer {
-      padding: 12px 20px;
-      border-top: 1px solid rgba(255,255,255,0.06);
-      text-align: center;
+      /* ── Auto-sync section ── */
+    .autosync-section {
+      padding: 14px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .autosync-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .autosync-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #e4e4e7;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .autosync-sub {
+      font-size: 11px;
+      color: #52525b;
+      margin-top: 6px;
+      min-height: 14px;
+    }
+    /* Toggle switch */
+    .toggle-wrap { display: flex; align-items: center; gap: 6px; }
+    .toggle { position: relative; width: 36px; height: 20px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: #27272a;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 14px; height: 14px;
+      left: 2px; top: 2px;
+      background: #71717a;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle input:checked + .toggle-slider { background: rgba(124,58,237,0.6); border-color: #7c3aed; }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(16px); background: #a78bfa; }
+    .interval-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .interval-label { font-size: 11px; color: #71717a; }
+    .interval-select {
+      flex: 1;
+      background: #18181b;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: #e4e4e7;
+      font-size: 11px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .pulse-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
     .footer a {
       font-size: 11px;
@@ -182,6 +254,29 @@
       <div class="status-dot dot-loading" id="dash-dot"></div>
       <span class="status-name">Dashboard</span>
       <span class="status-value" id="dash-status">Checking...</span>
+    </div>
+  </div>
+
+  <div class="autosync-section">
+    <div class="autosync-header">
+      <div class="autosync-title">
+        <span id="as-dot-wrap"></span>
+        ⚡ Auto-sync on Accept
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="autosync-toggle" />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="autosync-sub" id="autosync-sub">Push to GitHub automatically when LeetCode accepts your submission.</div>
+    <div class="interval-row" id="interval-row" style="display:none">
+      <span class="interval-label">Backup poll every</span>
+      <select class="interval-select" id="interval-select">
+        <option value="5">5 min</option>
+        <option value="10" selected>10 min</option>
+        <option value="15">15 min</option>
+        <option value="30">30 min</option>
+      </select>
     </div>
   </div>
 

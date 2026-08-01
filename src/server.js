@@ -358,6 +358,155 @@ app.post('/api/repos/select', async (req, res) => {
   }
 });
 
+// ── Auto-sync: server-side infrastructure ────────────────────────────────────
+
+let autoSyncTimer   = null;
+const autoSyncState = { running: false, lastRunAt: null, lastResult: null };
+
+function buildLCHeaders(cookie) {
+  const m = cookie.match(/csrftoken=([^;]+)/);
+  const csrf = m ? m[1].trim() : '';
+  return {
+    'Content-Type': 'application/json',
+    Cookie: cookie,
+    'x-csrftoken': csrf,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Referer: 'https://leetcode.com',
+    Origin:  'https://leetcode.com',
+  };
+}
+
+async function performIncrementalSync(cfg) {
+  const { leetcodeCookie, leetcodeUsername, githubToken, targetRepoUrl, lastAutoSyncAt } = cfg;
+  const since = lastAutoSyncAt
+    ? Math.floor(new Date(lastAutoSyncAt).getTime() / 1000)
+    : 0;
+
+  // 1. Get recent accepted submissions
+  const r = await fetch('https://leetcode.com/graphql', {
+    method: 'POST',
+    headers: buildLCHeaders(leetcodeCookie),
+    body: JSON.stringify({
+      query: `query($u:String!,$l:Int!){recentAcSubmissionList(username:$u,limit:$l){id title titleSlug timestamp}}`,
+      variables: { u: leetcodeUsername, l: 20 },
+    }),
+  });
+  const data = await r.json();
+  const recent = data.data?.recentAcSubmissionList ?? [];
+
+  // 2. Filter to only submissions newer than last sync
+  const newSubs = recent.filter(s => parseInt(s.timestamp) > since);
+  if (newSubs.length === 0) return { synced: 0 };
+
+  // Deduplicate by titleSlug (keep first/most-recent per problem)
+  const bySlug = new Map();
+  for (const s of newSubs) if (!bySlug.has(s.titleSlug)) bySlug.set(s.titleSlug, s);
+
+  // 3. Import leetcode helpers (dynamic import to avoid top-level cycle issues)
+  const { fetchLatestSubmissionId, fetchSubmissionDetails } = await import('./leetcodeClient.js');
+  const gitClient = await import('./gitClient.js');
+  const { getFileExtension, sanitizeFolderName } = await import('./handler.js');
+
+  // 4. Clone repo
+  gitClient.init(targetRepoUrl, githubToken);
+
+  // 5. For each new problem, commit
+  for (const [slug] of bySlug) {
+    const subInfo = await fetchLatestSubmissionId(leetcodeCookie, slug);
+    if (!subInfo) continue;
+    const details = await fetchSubmissionDetails(leetcodeCookie, subInfo.submissionId);
+    const folderName  = sanitizeFolderName(`${details.questionId} ${details.title}`);
+    const ext         = getFileExtension(details.lang);
+    const fileName    = `${details.questionId}-${slug}.${ext}`;
+    const commitMsg   = `Add: ${details.questionId}. ${details.title}`;
+    gitClient.commit(folderName, fileName, details.code, commitMsg, details.lastSubmittedAt);
+  }
+
+  // 6. Push once
+  gitClient.push();
+
+  return { synced: bySlug.size };
+}
+
+async function runAutoSync(titleSlug) {
+  if (autoSyncState.running) return;
+  autoSyncState.running = true;
+  try {
+    const cfg = await loadConfig();
+    if (!cfg.leetcodeCookie || !cfg.githubToken || !cfg.targetRepoUrl) return;
+    const result = await performIncrementalSync(cfg);
+    cfg.lastAutoSyncAt = new Date().toISOString();
+    await saveConfig(cfg);
+    autoSyncState.lastResult = result;
+    console.log(`[Auto-sync] Done — ${result.synced} new submission(s) pushed`);
+  } catch (err) {
+    console.error('[Auto-sync] Error:', err.message);
+    autoSyncState.lastResult = { error: err.message };
+  } finally {
+    autoSyncState.running  = false;
+    autoSyncState.lastRunAt = new Date().toISOString();
+  }
+}
+
+function resetAutoSyncTimer(intervalMinutes) {
+  if (autoSyncTimer) { clearInterval(autoSyncTimer); autoSyncTimer = null; }
+  if (intervalMinutes > 0) {
+    autoSyncTimer = setInterval(runAutoSync, intervalMinutes * 60 * 1000);
+  }
+}
+
+// Restore auto-sync on server start
+(async () => {
+  try {
+    const cfg = await loadConfig();
+    if (cfg.autoSyncEnabled && cfg.autoSyncIntervalMinutes) {
+      resetAutoSyncTimer(cfg.autoSyncIntervalMinutes);
+      console.log(`[Auto-sync] Restored: every ${cfg.autoSyncIntervalMinutes} min`);
+    }
+  } catch {}
+})();
+
+// GET /api/sync/auto/status
+app.get('/api/sync/auto/status', async (req, res) => {
+  const cfg = await loadConfig().catch(() => ({}));
+  const interval = cfg.autoSyncIntervalMinutes || 10;
+  res.json({
+    enabled:          !!cfg.autoSyncEnabled,
+    intervalMinutes:  interval,
+    running:          autoSyncState.running,
+    lastRunAt:        autoSyncState.lastRunAt,
+    lastResult:       autoSyncState.lastResult,
+    lastAutoSyncAt:   cfg.lastAutoSyncAt || null,
+    nextRunAt: autoSyncTimer && autoSyncState.lastRunAt
+      ? new Date(new Date(autoSyncState.lastRunAt).getTime() + interval * 60_000).toISOString()
+      : null,
+  });
+});
+
+// POST /api/sync/auto/config  { enabled, intervalMinutes }
+app.post('/api/sync/auto/config', async (req, res) => {
+  const { enabled, intervalMinutes = 10 } = req.body;
+  try {
+    const cfg = await loadConfig();
+    cfg.autoSyncEnabled        = !!enabled;
+    cfg.autoSyncIntervalMinutes = Number(intervalMinutes);
+    await saveConfig(cfg);
+    resetAutoSyncTimer(enabled ? cfg.autoSyncIntervalMinutes : 0);
+    res.json({ ok: true, enabled: cfg.autoSyncEnabled, intervalMinutes: cfg.autoSyncIntervalMinutes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/sync/auto/trigger  — called by the extension when "Accepted" detected
+app.post('/api/sync/auto/trigger', async (req, res) => {
+  const { source = 'unknown', titleSlug } = req.body || {};
+  console.log(`[Auto-sync] Trigger received from: ${source}${titleSlug ? ` (${titleSlug})` : ''}`);
+  // Run in background — don't await
+  runAutoSync(titleSlug);
+  res.json({ ok: true, message: 'Auto-sync triggered' });
+});
+
 // ── API: Sync ────────────────────────────────────────────────────────────────
 
 app.post('/api/sync/start', async (req, res) => {

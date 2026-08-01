@@ -1,25 +1,35 @@
 {
   "manifest_version": 3,
   "name": "CodeSync",
-  "version": "1.0.0",
-  "description": "Auto-capture your LeetCode session cookie and send it to the CodeSync dashboard.",
-  "permissions": ["cookies"],
+  "version": "1.1.0",
+  "description": "Auto-sync your LeetCode accepted submissions to GitHub. Detects Accepted results and pushes instantly.",
+  "permissions": ["cookies", "storage", "alarms", "tabs"],
   "host_permissions": [
     "https://leetcode.com/*",
     "http://localhost:3055/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/problems/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "CodeSync",
     "default_icon": {
-      "16": "icon16.png",
-      "48": "icon48.png",
+      "16":  "icon16.png",
+      "48":  "icon48.png",
       "128": "icon128.png"
     }
   },
   "icons": {
-    "16": "icon16.png",
-    "48": "icon48.png",
+    "16":  "icon16.png",
+    "48":  "icon48.png",
     "128": "icon128.png"
   }
 }
