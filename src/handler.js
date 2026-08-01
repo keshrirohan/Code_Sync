@@ -12,6 +12,8 @@
 //   unchanged. This is safer than interleaving fetch + commit.
 // ============================================================================
 
+import fs   from 'fs';
+import path from 'path';
 import { fetchAllSubmissions } from "./leetcodeClient.js";
 import * as gitClient from "./gitClient.js";
 import { scanRepo, generateReadme } from "./readmeGenerator.js";
@@ -121,37 +123,46 @@ async function execute(config) {
   console.log("=== Phase 2: Setting up Git repository ===\n");
   gitClient.init(repoUrl);
 
-  // ── Phase 3: Commit each submission ────────────────────────────────────
-  console.log("=== Phase 3: Creating commits ===\n");
+  // ── Phase 3: Commit only NEW submissions ──────────────────────────────────
+  console.log("=== Phase 3: Creating commits (skipping already synced) ===\n");
 
-  // Sort submissions by timestamp (oldest first) so commits appear in
-  // chronological order in the git log
+  // Get the cloned repo path so we can check for existing folders
+  const repoPath = gitClient.getRepoPath();
+
+  // Sort oldest-first so git log is in chronological order
   submissions.sort((a, b) => new Date(a.lastSubmittedAt) - new Date(b.lastSubmittedAt));
+
+  let newCount     = 0;
+  let skippedCount = 0;
 
   for (let i = 0; i < submissions.length; i++) {
     const sub = submissions[i];
 
-    // Build the folder name: "1 Two Sum"
+    // Build names
     const folderName = sanitizeFolderName(`${sub.id} ${sub.title}`);
+    const ext        = getFileExtension(sub.lang);
+    const fileName   = `${sub.id}-${sub.titleSlug}.${ext}`;
 
-    // Build the file name: "1-two-sum.py"
-    const ext = getFileExtension(sub.lang);
-    const fileName = `${sub.id}-${sub.titleSlug}.${ext}`;
+    // ── Incremental check: skip if this folder already exists in the repo ──
+    const folderPath = path.join(repoPath, folderName);
+    if (fs.existsSync(folderPath)) {
+      console.log(`  ⏭  Skipping (${i + 1}/${submissions.length}): ${sub.title} — already synced`);
+      skippedCount++;
+      continue;
+    }
 
-    // Build the commit message
+    // New problem — commit it
     const commitMessage = `Add: ${sub.id}. ${sub.title}`;
-
-    // Create the commit with the original LeetCode submission timestamp
     gitClient.commit(folderName, fileName, sub.code, commitMessage, sub.lastSubmittedAt);
-
-    // Print progress so the user knows it's working
-    console.log(`  Committed ${i + 1}/${submissions.length}: ${sub.title}`);
+    console.log(`  ✅ Committed (${i + 1}/${submissions.length}): ${sub.title}`);
+    newCount++;
   }
 
-  // ── Phase 4: Generate README ────────────────────────────────────────────
+  console.log(`\n  Summary: ${newCount} new committed, ${skippedCount} already in repo.`);
+
+  // ── Phase 4: Generate README (only if anything changed) ─────────────────
   console.log("\n=== Phase 4: Generating README.md ===");
   try {
-    const repoPath    = gitClient.getRepoPath();
     // Build the https:// URL without .git for GitHub blob links
     const ghRepoUrl   = repoUrl.replace(/\.git$/, '').replace(/\/\/[^@]+@/, '//');
     const entries     = scanRepo(repoPath);
