@@ -422,7 +422,19 @@ async function performIncrementalSync(cfg) {
     gitClient.commit(folderName, fileName, details.code, commitMsg, details.lastSubmittedAt);
   }
 
-  // 6. Push once
+  // 6. Regenerate README.md
+  try {
+    const { scanRepo, generateReadme } = await import('./readmeGenerator.js');
+    const repoPath  = gitClient.getRepoPath();
+    const ghRepoUrl = cfg.targetRepoUrl.replace(/\.git$/, '').replace(/\/\/[^@]+@/, '//');
+    const entries   = scanRepo(repoPath);
+    const readmeTxt = generateReadme(entries, ghRepoUrl);
+    gitClient.commitReadme(readmeTxt);
+  } catch (err) {
+    console.warn('[Auto-sync] README generation skipped:', err.message);
+  }
+
+  // 7. Push once
   gitClient.push();
 
   return { synced: bySlug.size };

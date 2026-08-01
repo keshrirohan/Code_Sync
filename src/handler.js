@@ -14,6 +14,7 @@
 
 import { fetchAllSubmissions } from "./leetcodeClient.js";
 import * as gitClient from "./gitClient.js";
+import { scanRepo, generateReadme } from "./readmeGenerator.js";
 
 /**
  * LANG_TO_EXTENSION — Maps LeetCode's language identifiers to file extensions.
@@ -147,8 +148,22 @@ async function execute(config) {
     console.log(`  Committed ${i + 1}/${submissions.length}: ${sub.title}`);
   }
 
-  // ── Phase 4: Push all commits at once ──────────────────────────────────
-  console.log("\n=== Phase 4: Pushing to remote ===");
+  // ── Phase 4: Generate README ────────────────────────────────────────────
+  console.log("\n=== Phase 4: Generating README.md ===");
+  try {
+    const repoPath    = gitClient.getRepoPath();
+    // Build the https:// URL without .git for GitHub blob links
+    const ghRepoUrl   = repoUrl.replace(/\.git$/, '').replace(/\/\/[^@]+@/, '//');
+    const entries     = scanRepo(repoPath);
+    const readmeText  = generateReadme(entries, ghRepoUrl);
+    gitClient.commitReadme(readmeText);
+    console.log(`  README.md generated with ${entries.length} problems.`);
+  } catch (err) {
+    console.warn(`  Warning: README generation failed (${err.message}) — continuing.`);
+  }
+
+  // ── Phase 5: Push all commits at once ──────────────────────────────────
+  console.log("\n=== Phase 5: Pushing to remote ===");
   gitClient.push();
 
   console.log("✅ CodeSync complete! All submissions have been synced.");
