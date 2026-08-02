@@ -1,64 +1,153 @@
 // ============================================================================
-// storage.js — Persistent storage for config and sync history.
+// storage.js — MongoDB-backed replacement for the old JSON file storage.
 //
-// Uses atomic file writes (.tmp → rename) to prevent corruption on crash.
-// All data lives in /data/ at the project root (gitignored).
+// Public API is intentionally identical to the old file-based version so
+// the rest of the codebase (server.js, handler.js) needs minimal changes:
+//
+//   loadConfig()              → plain object with decrypted sensitive fields
+//   saveConfig(data)          → encrypts sensitive fields, saves to MongoDB
+//   loadHistory()             → array of history docs (newest first)
+//   addHistoryEntry(entry)    → inserts one SyncHistory document
+//   deleteHistoryEntry(id)    → deletes by UUID 'id' field
+//
+// Encrypted fields (stored ciphertext, returned plaintext):
+//   • leetcodeCookie
+//   • githubToken
+//   • githubOAuthClientSecret
 // ============================================================================
 
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import Settings    from './models/Settings.js';
+import SyncHistory from './models/SyncHistory.js';
+import { encrypt, decrypt, isEncrypted } from './utils/crypto.js';
+import logger from './utils/logger.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Fields that must be encrypted before writing to the database
+const ENCRYPTED_FIELDS = ['leetcodeCookie', 'githubToken', 'githubOAuthClientSecret'];
 
-const DATA_DIR = path.join(__dirname, '../data');
-const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
-const HISTORY_PATH = path.join(DATA_DIR, 'history.json');
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+/**
+ * encryptFields — Encrypt every sensitive field in a config object.
+ * Skips fields that are already encrypted (idempotent).
+ */
+function encryptFields(data) {
+  const result = { ...data };
+  for (const field of ENCRYPTED_FIELDS) {
+    if (result[field] && !isEncrypted(result[field])) {
+      result[field] = encrypt(result[field]);
+    }
+  }
+  return result;
 }
 
-async function atomicWrite(filePath, data) {
-  const tmpPath = filePath + '.tmp';
-  await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
-  await fs.rename(tmpPath, filePath);
+/**
+ * decryptFields — Decrypt every sensitive field coming out of the database.
+ * Leaves null/undefined fields alone.
+ */
+function decryptFields(data) {
+  if (!data) return {};
+  const result = { ...data };
+  for (const field of ENCRYPTED_FIELDS) {
+    if (result[field]) {
+      result[field] = decrypt(result[field]);
+    }
+  }
+  return result;
 }
 
+// ── Config (Settings singleton) ───────────────────────────────────────────────
+
+/**
+ * loadConfig — Returns the global settings as a plain object.
+ * Sensitive fields are decrypted before returning.
+ */
 export async function loadConfig() {
   try {
-    const raw = await fs.readFile(CONFIG_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch {
+    const raw = await Settings.loadGlobal();
+    return decryptFields(raw);
+  } catch (err) {
+    logger.error('loadConfig failed:', { err: err.message });
     return {};
   }
 }
 
+/**
+ * saveConfig — Merges `data` into the global settings document.
+ * Sensitive fields are encrypted before writing.
+ *
+ * Input:  data (object) — partial or full config (plaintext values)
+ * Output: void
+ */
 export async function saveConfig(data) {
-  await ensureDataDir();
-  await atomicWrite(CONFIG_PATH, data);
+  try {
+    const encrypted = encryptFields(data);
+    await Settings.saveGlobal(encrypted);
+  } catch (err) {
+    logger.error('saveConfig failed:', { err: err.message });
+    throw err;
+  }
 }
 
+// ── Sync History ──────────────────────────────────────────────────────────────
+
+/**
+ * loadHistory — Returns all sync history entries, newest first.
+ * Output: Array of plain objects matching the old history.json shape.
+ */
 export async function loadHistory() {
   try {
-    const raw = await fs.readFile(HISTORY_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch {
+    const docs = await SyncHistory
+      .find({})
+      .sort({ startedAt: -1 })
+      .lean();
+    return docs;
+  } catch (err) {
+    logger.error('loadHistory failed:', { err: err.message });
     return [];
   }
 }
 
+/**
+ * addHistoryEntry — Inserts a new sync history record.
+ *
+ * Input: entry — object with at least { id, startedAt, status, repoUrl, ... }
+ * Output: void
+ */
 export async function addHistoryEntry(entry) {
-  await ensureDataDir();
-  const history = await loadHistory();
-  history.unshift(entry); // newest first
-  await atomicWrite(HISTORY_PATH, history);
+  try {
+    await SyncHistory.create(entry);
+  } catch (err) {
+    // Duplicate key (same id re-inserted) — update instead
+    if (err.code === 11000) {
+      const { id, ...rest } = entry;
+      await SyncHistory.findOneAndUpdate({ id }, { $set: rest }, { new: true });
+    } else {
+      logger.error('addHistoryEntry failed:', { err: err.message });
+      throw err;
+    }
+  }
 }
 
+/**
+ * updateHistoryEntry — Updates an existing entry by UUID id.
+ * Used to mark a 'running' job as 'success' or 'error' when it completes.
+ */
+export async function updateHistoryEntry(id, updates) {
+  try {
+    await SyncHistory.findOneAndUpdate({ id }, { $set: updates });
+  } catch (err) {
+    logger.error('updateHistoryEntry failed:', { err: err.message });
+  }
+}
+
+/**
+ * deleteHistoryEntry — Deletes a sync history record by UUID id.
+ */
 export async function deleteHistoryEntry(id) {
-  const history = await loadHistory();
-  const updated = history.filter(h => h.id !== id);
-  await ensureDataDir();
-  await atomicWrite(HISTORY_PATH, updated);
+  try {
+    await SyncHistory.deleteOne({ id });
+  } catch (err) {
+    logger.error('deleteHistoryEntry failed:', { err: err.message });
+    throw err;
+  }
 }

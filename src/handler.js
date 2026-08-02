@@ -121,7 +121,8 @@ async function execute(config) {
 
   // ── Phase 2: Clone the repo ────────────────────────────────────────────
   console.log("=== Phase 2: Setting up Git repository ===\n");
-  gitClient.init(repoUrl);
+  // Pass the GitHub token so HTTPS cloning works on Render (no stored creds)
+  gitClient.init(repoUrl, config.githubToken || null);
 
   // ── Phase 3: Commit only NEW submissions ──────────────────────────────────
   console.log("=== Phase 3: Creating commits (skipping already synced) ===\n");
@@ -181,3 +182,33 @@ async function execute(config) {
 }
 
 export { execute, getFileExtension, sanitizeFolderName };
+
+// ── Standalone child-process entry point ─────────────────────────────────────
+// When server.js spawns `node src/handler.js`, credentials are passed via
+// environment variables (never CLI args — those would be visible in `ps`).
+//
+// Required env vars injected by server.js:
+//   CODESYNC_COOKIE    — LeetCode session cookie (plaintext, already decrypted)
+//   CODESYNC_REPO_URL  — target GitHub repo HTTPS URL
+//   CODESYNC_TOKEN     — GitHub PAT / OAuth token
+//   CODESYNC_DRY_RUN   — '1' for dry run, '0' for real sync
+
+const isMain = process.argv[1] &&
+  (process.argv[1].endsWith('handler.js') || process.argv[1].endsWith('handler'));
+
+if (isMain) {
+  const cookie    = process.env.CODESYNC_COOKIE;
+  const repoUrl   = process.env.CODESYNC_REPO_URL;
+  const token     = process.env.CODESYNC_TOKEN || null;
+  const dryRun    = process.env.CODESYNC_DRY_RUN === '1';
+
+  if (!cookie || !repoUrl) {
+    console.error('FATAL: CODESYNC_COOKIE and CODESYNC_REPO_URL must be set.');
+    process.exit(1);
+  }
+
+  execute({ cookie, repoUrl, githubToken: token, dryRun }).catch(err => {
+    console.error(`\nFATAL ERROR: ${err.message}`);
+    process.exit(1);
+  });
+}
