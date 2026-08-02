@@ -1,263 +1,275 @@
-// ============================================================================
-// popup.js — CodeSync Extension popup logic (v1.1 redesign)
-//
-// On open:
-//  1. Check LeetCode login status via chrome.cookies
-//  2. Check if CodeSync dashboard is running at localhost:3055
-//  3. Load auto-sync state from chrome.storage
-//  4. Fetch last-sync time from /api/sync/auto/status
-// ============================================================================
+// ─── CodeSync Popup ───────────────────────────────────────────────────────────
 
-const DASHBOARD = 'http://localhost:3055';
-const el = (id) => document.getElementById(id);
+(async function () {
+  "use strict";
 
-// ── DOM refs ──────────────────────────────────────────────────────────────────
+  const DEFAULT_BASE_URL = "http://localhost:3000";
 
-const lcDot        = el('lc-dot');
-const lcVal        = el('lc-val');
-const dashDot      = el('dash-dot');
-const dashVal      = el('dash-val');
-const lastSyncBadge= el('last-sync-badge');
+  // ─── DOM refs ──────────────────────────────────────────────────────────
 
-const asPulse      = el('as-pulse');
-const asSub        = el('as-sub');
-const autoToggle   = el('autosync-toggle');
-const intervalRow  = el('interval-row');
-const intervalSel  = el('interval-select');
+  const statusBadge      = document.getElementById("status-badge");
+  const statusText       = document.getElementById("status-text");
+  const userSection      = document.getElementById("user-section");
+  const userAvatar       = document.getElementById("user-avatar");
+  const userName         = document.getElementById("user-name");
+  const userGithub       = document.getElementById("user-github");
+  const authPrompt       = document.getElementById("auth-prompt");
+  const signinBtn        = document.getElementById("signin-btn");
+  const lastSyncSection  = document.getElementById("last-sync-section");
+  const syncStatusTag    = document.getElementById("sync-status-tag");
+  const syncProblemName  = document.getElementById("sync-problem-name");
+  const syncDifficulty   = document.getElementById("sync-difficulty");
+  const syncLanguage     = document.getElementById("sync-language");
+  const syncTime         = document.getElementById("sync-time");
+  const syncCommitLink   = document.getElementById("sync-commit-link");
+  const controlsSection  = document.getElementById("controls-section");
+  const autoSyncToggle   = document.getElementById("auto-sync-toggle");
+  const linksSection     = document.getElementById("links-section");
+  const dashboardLink    = document.getElementById("dashboard-link");
+  const settingsLink     = document.getElementById("settings-link");
+  const historyLink      = document.getElementById("history-link");
+  const serverUrlInput   = document.getElementById("server-url-input");
+  const saveUrlBtn       = document.getElementById("save-url-btn");
+  const noRepoWarning      = document.getElementById("no-repo-warning");
+  const noRepoSettingsLink = document.getElementById("no-repo-settings-link");
+  const debugErrorDot    = document.getElementById("debug-error-dot");
+  const debugLogList     = document.getElementById("debug-log-list");
+  const debugCount       = document.getElementById("debug-count");
+  const debugWebLink     = document.getElementById("debug-web-link");
 
-const syncNowBtn   = el('sync-now-btn');
-const syncNowIcon  = el('sync-now-icon');
-const syncNowLabel = el('sync-now-label');
+  // ─── Helpers ───────────────────────────────────────────────────────────
 
-const openBtn      = el('open-btn');
-const lcBtn        = el('lc-btn');
+  async function getBaseUrl() {
+    return new Promise((resolve) => {
+      chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL }, (r) => resolve(r.baseUrl));
+    });
+  }
 
-const cookieSection= el('cookie-section');
-const sendBtn      = el('send-btn');
-const sendLabel    = el('send-label');
+  function timeAgo(timestamp) {
+    const s = Math.floor((Date.now() - timestamp) / 1000);
+    if (s < 60)   return "Just now";
+    const m = Math.floor(s / 60);
+    if (m < 60)   return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24)   return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
 
-const toast        = el('toast');
-const toastIcon    = el('toast-icon');
-const toastMsg     = el('toast-msg');
+  function setStatus(state, text) {
+    statusBadge.className = `status-badge status-${state}`;
+    statusText.textContent = text;
+  }
 
-let capturedCookie  = null;
-let dashReachable   = false;
-let syncNowRunning  = false;
+  // ─── Set up links ──────────────────────────────────────────────────────
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+  const baseUrl = await getBaseUrl();
+  signinBtn.href        = baseUrl;
+  dashboardLink.href    = `${baseUrl}/dashboard`;
+  settingsLink.href     = `${baseUrl}/dashboard/settings`;
+  historyLink.href      = `${baseUrl}/dashboard/history`;
+  debugWebLink.href     = `${baseUrl}/dashboard/debug`;
+  serverUrlInput.value  = baseUrl;
 
-function setDot(dotEl, state) {
-  dotEl.className = 'status-dot';
-  if (state === 'ok')  dotEl.classList.add('dot-ok');
-  else if (state === 'err') dotEl.classList.add('dot-err');
-  else dotEl.classList.add('dot-loading');
-}
+  // ─── Tab switching ─────────────────────────────────────────────────────
 
-function showToast(type, msg) {
-  toast.className = `toast show ${type}`;
-  toastIcon.textContent = type === 'success' ? '✅' : '❌';
-  toastMsg.textContent  = msg;
-  setTimeout(() => toast.classList.remove('show'), 4000);
-}
-
-function timeAgo(isoStr) {
-  if (!isoStr) return null;
-  const diff = Date.now() - new Date(isoStr).getTime();
-  const mins  = Math.floor(diff / 60000);
-  if (mins < 1)  return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-function getCookie(name) {
-  return new Promise(resolve => {
-    chrome.cookies.get({ url: 'https://leetcode.com', name }, c => resolve(c?.value || null));
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tab; 
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("tab-active"));
+      btn.classList.add("tab-active");
+      document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
+      document.getElementById(`tab-${tab}`).classList.remove("hidden");
+      if (tab === "debug") loadDebugLogs();
+    });
   });
-}
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+  // ─── Auth check ────────────────────────────────────────────────────────
 
-async function init() {
-  // 1. LeetCode login check
-  const [session, csrf] = await Promise.all([
-    getCookie('LEETCODE_SESSION'),
-    getCookie('csrftoken'),
-  ]);
-
-  if (session && csrf) {
-    capturedCookie = `LEETCODE_SESSION=${session}; csrftoken=${csrf}`;
-    setDot(lcDot, 'ok');
-    lcVal.textContent  = 'Logged in ✓';
-    lcVal.className    = 'status-val ok';
-    cookieSection.style.display = 'none';
-  } else {
-    setDot(lcDot, 'err');
-    lcVal.textContent = session ? 'Missing csrftoken — re-login' : 'Not logged in to LeetCode';
-    lcVal.className   = 'status-val err';
-    cookieSection.style.display = 'block';
-    sendBtn.disabled  = !session; // can only send if we at least have session
-  }
-
-  // 2. Dashboard reachability + config check
   try {
-    const [cfgRes, autoRes] = await Promise.all([
-      fetch(`${DASHBOARD}/api/config`,           { signal: AbortSignal.timeout(2500) }),
-      fetch(`${DASHBOARD}/api/sync/auto/status`, { signal: AbortSignal.timeout(2500) }),
-    ]);
+    const authResponse = await chrome.runtime.sendMessage({ type: "CHECK_AUTH" });
 
-    if (cfgRes.ok) {
-      dashReachable = true;
-      const cfg = await cfgRes.json();
-      setDot(dashDot, 'ok');
+    if (authResponse?.success && authResponse?.data) {
+      const user = authResponse.data;
+      setStatus("connected", "Connected");
 
-      // Show connected username or generic "Running"
-      const who = cfg.leetcodeUsername || (cfg.hasLeetcodeCookie ? 'Connected' : null);
-      dashVal.textContent = who ? `Running · ${who}` : 'Running ✓';
-      dashVal.className   = 'status-val ok';
+      userSection.classList.remove("hidden");
+      userName.textContent   = user.name || user.email || "User";
+      userGithub.textContent = user.githubUsername ? `@${user.githubUsername}` : user.email || "";
+      userAvatar.src = user.image ||
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || "U")}&background=6366f1&color=fff&size=72`;
 
-      // Last sync badge
-      if (autoRes.ok) {
-        const auto = await autoRes.json();
-        const ago  = timeAgo(auto.lastAutoSyncAt || auto.lastRunAt);
-        if (ago) {
-          lastSyncBadge.textContent  = `🔄 ${ago}`;
-          lastSyncBadge.style.display = '';
+      controlsSection.classList.remove("hidden");
+      linksSection.classList.remove("hidden");
+
+      // ── Check repo is configured and show warning if not ──────────────
+      try {
+        const settingsResp = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+        const selectedRepo = settingsResp?.data?.selectedRepoFullName;
+        noRepoSettingsLink.href = `${baseUrl}/dashboard/settings`;
+        if (!selectedRepo) {
+          noRepoWarning.classList.remove("hidden");
+        } else {
+          noRepoWarning.classList.add("hidden");
         }
-      }
+      } catch { /* non-fatal */ }
 
-      // Enable Sync Now
-      if (cfg.hasLeetcodeCookie && cfg.hasGithubToken && cfg.targetRepoUrl) {
-        syncNowBtn.disabled = false;
-      } else {
-        syncNowLabel.textContent = 'Sync Now (finish setup in Dashboard)';
-      }
+      const syncState = await chrome.runtime.sendMessage({ type: "GET_AUTO_SYNC" });
+      autoSyncToggle.checked = syncState?.autoSync !== false;
 
+      await loadLastSync();
     } else {
-      throw new Error();
-    }
-  } catch {
-    setDot(dashDot, 'err');
-    dashVal.textContent = 'Dashboard not running';
-    dashVal.className   = 'status-val err';
-  }
-
-  // 3. Auto-sync state
-  await loadAutoSyncState();
-}
-
-// ── Auto-sync ─────────────────────────────────────────────────────────────────
-
-function renderAutoSyncUI(enabled, intervalMinutes) {
-  autoToggle.checked = enabled;
-  intervalRow.style.display = enabled ? 'flex' : 'none';
-
-  if (enabled) {
-    asPulse.innerHTML   = '<span class="pulse-dot"></span>';
-    asSub.textContent   = `ON · instant on Accept + polls every ${intervalMinutes} min`;
-    asSub.className     = 'autosync-sub active';
-  } else {
-    asPulse.innerHTML   = '';
-    asSub.textContent   = 'Push to GitHub the moment LeetCode says Accepted';
-    asSub.className     = 'autosync-sub';
-  }
-}
-
-async function loadAutoSyncState() {
-  const cfg      = await chrome.storage.local.get(['autoSyncEnabled', 'autoSyncIntervalMinutes']);
-  const enabled  = cfg.autoSyncEnabled ?? false;
-  const interval = cfg.autoSyncIntervalMinutes ?? 10;
-  intervalSel.value = String(interval);
-  renderAutoSyncUI(enabled, interval);
-}
-
-function applyAutoSyncChange(enabled, intervalMinutes) {
-  renderAutoSyncUI(enabled, intervalMinutes);
-  chrome.runtime.sendMessage({ type: 'SET_AUTO_SYNC', enabled, intervalMinutes });
-  fetch(`${DASHBOARD}/api/sync/auto/config`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled, intervalMinutes }),
-  }).catch(() => {});
-}
-
-autoToggle.addEventListener('change', () => {
-  applyAutoSyncChange(autoToggle.checked, parseInt(intervalSel.value, 10));
-});
-intervalSel.addEventListener('change', () => {
-  if (!autoToggle.checked) return;
-  applyAutoSyncChange(true, parseInt(intervalSel.value, 10));
-});
-
-// ── Sync Now ──────────────────────────────────────────────────────────────────
-
-syncNowBtn.addEventListener('click', async () => {
-  if (syncNowRunning || !dashReachable) return;
-  syncNowRunning = true;
-  syncNowIcon.innerHTML = '<span class="spinner"></span>';
-  syncNowLabel.textContent = 'Checking for new problems...';
-  syncNowBtn.disabled = true;
-
-  try {
-    const res  = await fetch(`${DASHBOARD}/api/sync/auto/trigger`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: 'extension-popup' }),
-    });
-    if (res.ok) {
-      showToast('success', 'Sync started! New problems will be pushed.');
-      syncNowIcon.textContent  = '✅';
-      syncNowLabel.textContent = 'Sync triggered!';
-    } else {
-      throw new Error('Server error');
-    }
-  } catch {
-    showToast('error', 'Could not reach dashboard. Is it running?');
-    syncNowIcon.textContent  = '🔄';
-    syncNowLabel.textContent = 'Sync Now (only new problems)';
-  } finally {
-    syncNowRunning = false;
-    syncNowBtn.disabled = false;
-  }
-});
-
-// ── Connect cookie ─────────────────────────────────────────────────────────────
-
-sendBtn.addEventListener('click', async () => {
-  if (!capturedCookie) return;
-  sendBtn.disabled = true;
-  sendLabel.textContent = 'Connecting...';
-
-  try {
-    const res  = await fetch(`${DASHBOARD}/api/auth/leetcode-from-extension`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cookie: capturedCookie }),
-    });
-    const data = await res.json();
-    if (data.valid) {
-      showToast('success', `Connected as ${data.username}!`);
-      sendLabel.textContent = '✓ Connected!';
-      cookieSection.style.display = 'none';
-      lcVal.textContent = `${data.username} ✓`;
-      lcVal.className   = 'status-val ok';
-      setDot(lcDot, 'ok');
-    } else {
-      throw new Error(data.error || 'Cookie rejected');
+      setStatus("disconnected", "Not connected");
+      authPrompt.classList.remove("hidden");
     }
   } catch (err) {
-    showToast('error', err.message);
-    sendBtn.disabled = false;
-    sendLabel.textContent = 'Connect LeetCode Account';
+    console.error("Popup auth check failed:", err);
+    setStatus("disconnected", "Error");
+    authPrompt.classList.remove("hidden");
   }
-});
 
-// ── Nav buttons ────────────────────────────────────────────────────────────────
+  // ─── Last sync card ────────────────────────────────────────────────────
 
-openBtn.addEventListener('click', () => chrome.tabs.create({ url: DASHBOARD }));
-lcBtn.addEventListener('click',   () => chrome.tabs.create({ url: 'https://leetcode.com' }));
+  async function loadLastSync() {
+    try {
+      const lastSync = await chrome.runtime.sendMessage({ type: "GET_LAST_SYNC" });
+      if (!lastSync?.problemName) return;
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+      lastSyncSection.classList.remove("hidden");
+      syncProblemName.textContent = lastSync.problemName;
 
-init();
+      const status = (lastSync.status || "SUCCESS").toUpperCase();
+      syncStatusTag.textContent = status;
+      syncStatusTag.className   = `tag tag-${status.toLowerCase()}`;
+
+      const diff = lastSync.difficulty || "Unknown";
+      syncDifficulty.textContent = diff;
+      syncDifficulty.className   = `difficulty-tag difficulty-${diff.toLowerCase()}`;
+
+      syncLanguage.textContent = (lastSync.language || "").toUpperCase();
+      syncTime.textContent     = lastSync.timestamp ? timeAgo(lastSync.timestamp) : "";
+
+      if (lastSync.commitUrl && status === "SUCCESS") {
+        syncCommitLink.href = lastSync.commitUrl;
+        syncCommitLink.classList.remove("hidden");
+      } else {
+        syncCommitLink.classList.add("hidden");
+      }
+    } catch (err) {
+      console.error("loadLastSync error:", err);
+    }
+  }
+
+  // ─── Auto-sync toggle ──────────────────────────────────────────────────
+
+  autoSyncToggle.addEventListener("change", async () => {
+    await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled: autoSyncToggle.checked });
+  });
+
+  // ─── Server URL save ───────────────────────────────────────────────────
+
+  saveUrlBtn.addEventListener("click", async () => {
+    const newUrl = serverUrlInput.value.trim().replace(/\/$/, "");
+    if (!newUrl) return;
+    await chrome.storage.sync.set({ baseUrl: newUrl });
+
+    signinBtn.href     = newUrl;
+    dashboardLink.href = `${newUrl}/dashboard`;
+    settingsLink.href  = `${newUrl}/dashboard/settings`;
+    historyLink.href   = `${newUrl}/dashboard/history`;
+    debugWebLink.href  = `${newUrl}/dashboard/debug`;
+
+    saveUrlBtn.textContent = "Saved ✓";
+    saveUrlBtn.classList.add("saved");
+    setTimeout(() => {
+      saveUrlBtn.textContent = "Save";
+      saveUrlBtn.classList.remove("saved");
+    }, 2000);
+  });
+
+  // ─── Debug tab ─────────────────────────────────────────────────────────
+
+  let activeFilter = "ALL";
+  let allLogs = [];
+
+  async function loadDebugLogs() {
+    const resp = await chrome.runtime.sendMessage({ type: "GET_LOGS" });
+    allLogs = resp?.logs ?? [];
+    renderLogs();
+
+    // Red dot on tab if any errors
+    const hasErrors = allLogs.some((l) => l.level === "error");
+    debugErrorDot.classList.toggle("hidden", !hasErrors);
+  }
+
+  function renderLogs() {
+    const filtered = activeFilter === "ALL"
+      ? allLogs
+      : allLogs.filter((l) => l.level === activeFilter);
+
+    debugCount.textContent = `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`;
+
+    if (filtered.length === 0) {
+      debugLogList.innerHTML = '<div class="debug-empty">No log entries match this filter.</div>';
+      return;
+    }
+
+    debugLogList.innerHTML = filtered.map((entry) => {
+      const levelClass = `log-${entry.level}`;
+      const source     = entry.source === "background" ? "bg" : entry.source === "content" ? "cs" : "??";
+      const ts         = new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+      // Extra detail line
+      let detail = "";
+      if (entry.problem) detail += entry.problem;
+      if (entry.language) detail += detail ? ` · ${entry.language}` : entry.language;
+      if (entry.error) detail += `\n${entry.error}`;
+
+      return `
+        <div class="log-row ${levelClass}">
+          <div class="log-header">
+            <span class="log-badge log-badge-${entry.level}">${entry.level.toUpperCase()}</span>
+            <span class="log-source">[${source}]</span>
+            <span class="log-event">${entry.event}</span>
+            <span class="log-ts">${ts}</span>
+          </div>
+          ${detail ? `<div class="log-detail">${detail.replace(/\n/g, "<br>")}</div>` : ""}
+        </div>
+      `;
+    }).join("");
+  }
+
+  // Filter buttons
+  document.querySelectorAll(".debug-filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeFilter = btn.dataset.filter;
+      document.querySelectorAll(".debug-filter-btn").forEach((b) => b.classList.remove("debug-filter-active"));
+      btn.classList.add("debug-filter-active");
+      renderLogs();
+    });
+  });
+
+  // Refresh
+  document.getElementById("debug-refresh-btn").addEventListener("click", loadDebugLogs);
+
+  // Copy JSON
+  document.getElementById("debug-copy-btn").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(JSON.stringify(allLogs, null, 2));
+    const btn = document.getElementById("debug-copy-btn");
+    btn.textContent = "Copied ✓";
+    setTimeout(() => { btn.innerHTML = `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`; }, 2000);
+  });
+
+  // Clear
+  document.getElementById("debug-clear-btn").addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ type: "CLEAR_LOGS" });
+    allLogs = [];
+    renderLogs();
+    debugErrorDot.classList.add("hidden");
+  });
+
+  // Load logs on open if debug tab is already active somehow
+  if (!document.getElementById("tab-debug").classList.contains("hidden")) {
+    loadDebugLogs();
+  }
+
+})();
