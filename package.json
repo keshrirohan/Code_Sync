@@ -3,17 +3,18 @@
   "version": "2.0.0",
   "description": "Sync your LeetCode submissions into a Git repo with original timestamps",
   "type": "module",
-  "main": "src/server.js",
+  "main": "server/src/server.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node src/server.js",
-    "cli": "node src/index.js",
-    "build:frontend": "cd frontend && npm install && npm run build",
-    "dev:frontend": "cd frontend && npm run dev",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "start": "node server/src/server.js",
+    "dashboard": "node server/src/server.js",
+    "dev": "node server/src/server.js",
+    "cli": "node server/src/cli/index.js",
+    "build:frontend": "cd client && npm install && npm run build",
+    "dev:frontend": "cd client && npm run dev",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --roots server/tests"
   },
   "keywords": ["leetcode", "git", "sync", "dashboard", "mongodb"],
   "license": "MIT",

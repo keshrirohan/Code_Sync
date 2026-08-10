@@ -16,10 +16,10 @@
 //   • githubOAuthClientSecret
 // ============================================================================
 
-import Settings    from './models/Settings.js';
-import SyncHistory from './models/SyncHistory.js';
-import { encrypt, decrypt, isEncrypted } from './utils/crypto.js';
-import logger from './utils/logger.js';
+import Settings    from '../models/Settings.js';
+import SyncHistory from '../models/SyncHistory.js';
+import { encrypt, decrypt, isEncrypted } from '../utils/crypto.js';
+import logger from '../utils/logger.js';
 
 // Fields that must be encrypted before writing to the database
 const ENCRYPTED_FIELDS = ['leetcodeCookie', 'githubToken', 'githubOAuthClientSecret'];

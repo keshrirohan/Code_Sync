@@ -5,5 +5,18 @@ codesync_repo/
 data/
 
 # Frontend build artifacts
+client/node_modules/
+client/dist/
+
+# Server dependencies (if installed locally)
+server/node_modules/
+
+# Extension dependencies
+extension/node_modules/
+
+# Environment variables (contains secrets)
+.env
+
+# Legacy frontend path (keep for safety)
 frontend/node_modules/
 frontend/dist/

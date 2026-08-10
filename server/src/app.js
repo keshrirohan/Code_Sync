@@ -1,14 +1,9 @@
 // ============================================================================
-// server.js — Express server for the CodeSync web dashboard.
+// app.js — Express application setup for the CodeSync web dashboard.
 //
-// Boot order:
-//   1. Load .env  (dotenv)
-//   2. Validate required env vars
-//   3. Connect to MongoDB
-//   4. Register middleware
-//   5. Mount all API routes
-//   6. Serve React frontend (production build)
-//   7. Start listening
+// This module creates and configures the Express app with all middleware
+// and routes, then exports it. The actual server startup (boot + listen)
+// is in server.js.
 //
 // Environment variables used:
 //   PORT            — listen port (default 3055)
@@ -31,14 +26,13 @@ import { fileURLToPath } from 'url';
 import fetch          from 'node-fetch';
 import crypto         from 'crypto';
 
-import { connectDB }       from './config/db.js';
 import logger               from './utils/logger.js';
 import { errorHandler }     from './middleware/errorHandler.js';
 import { requestLogger }    from './middleware/requestLogger.js';
 import {
   loadConfig, saveConfig,
   loadHistory, addHistoryEntry, updateHistoryEntry, deleteHistoryEntry,
-} from './storage.js';
+} from './storage/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -98,7 +92,7 @@ app.use(requestLogger);
 
 // ── Static frontend ───────────────────────────────────────────────────────────
 
-const FRONTEND_DIST = path.join(__dirname, '../frontend/dist');
+const FRONTEND_DIST = path.join(__dirname, '../../client/dist');
 app.use(express.static(FRONTEND_DIST));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -427,8 +421,10 @@ app.post('/api/sync/start', async (req, res) => {
 
     // ── Run sync in a child process so it doesn't block the event loop ──
     // Pass config via env vars — never via CLI args (would be visible in `ps`)
-    const child = spawn(process.execPath, ['src/handler.js'], {
-      cwd: path.join(__dirname, '..'),
+    // Resolve the handler path relative to the project root
+    const projectRoot = path.join(__dirname, '../..');
+    const child = spawn(process.execPath, ['server/src/sync/handler.js'], {
+      cwd: projectRoot,
       env: {
         ...process.env,
         CODESYNC_COOKIE:   cfg.leetcodeCookie,
@@ -536,9 +532,9 @@ async function performIncrementalSync(cfg) {
   const bySlug = new Map();
   for (const s of newSubs) if (!bySlug.has(s.titleSlug)) bySlug.set(s.titleSlug, s);
 
-  const { fetchLatestSubmissionId, fetchSubmissionDetails } = await import('./leetcodeClient.js');
-  const gitClient = await import('./gitClient.js');
-  const { getFileExtension, sanitizeFolderName } = await import('./handler.js');
+  const { fetchLatestSubmissionId, fetchSubmissionDetails } = await import('./leetcode/leetcodeClient.js');
+  const gitClient = await import('./git/gitClient.js');
+  const { getFileExtension, sanitizeFolderName } = await import('./sync/handler.js');
 
   gitClient.init(targetRepoUrl, githubToken);
 
@@ -554,7 +550,7 @@ async function performIncrementalSync(cfg) {
   }
 
   try {
-    const { scanRepo, generateReadme } = await import('./readmeGenerator.js');
+    const { scanRepo, generateReadme } = await import('./sync/readmeGenerator.js');
     const repoPath  = gitClient.getRepoPath();
     const ghRepoUrl = cfg.targetRepoUrl.replace(/\.git$/, '').replace(/\/\/[^@]+@/, '//');
     const entries   = scanRepo(repoPath);
@@ -644,33 +640,6 @@ app.get('*', (req, res) => {
 // ── Centralised error handler (must be after all routes) ─────────────────────
 app.use(errorHandler);
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-
-async function boot() {
-  await connectDB();
-
-  // Restore auto-sync timer from persisted settings
-  try {
-    const cfg = await loadConfig();
-    if (cfg.autoSyncEnabled && cfg.autoSyncIntervalMinutes) {
-      resetAutoSyncTimer(cfg.autoSyncIntervalMinutes);
-      logger.info(`[Auto-sync] Restored: every ${cfg.autoSyncIntervalMinutes} min`);
-    }
-  } catch {
-    // Non-fatal — auto-sync just won't run until manually enabled
-  }
-
-  app.listen(PORT, () => {
-    logger.info(`CodeSync server running on port ${PORT}`);
-    logger.info(`  Backend URL:  ${BACKEND_URL}`);
-    logger.info(`  Frontend URL: ${FRONTEND_URL}`);
-    logger.info(`  OAuth callback: ${CALLBACK_URL}`);
-  });
-}
-
-boot().catch(err => {
-  logger.error('Fatal boot error:', { err: err.message });
-  process.exit(1);
-});
-
+// Export for use by server.js
+export { app, PORT, BACKEND_URL, FRONTEND_URL, CALLBACK_URL, resetAutoSyncTimer };
 export default app;

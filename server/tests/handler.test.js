@@ -13,21 +13,29 @@ import { jest } from "@jest/globals";
 // the fake versions instead of the real ones.
 
 // Mock leetcodeClient — returns fake submission data
-jest.unstable_mockModule("../src/leetcodeClient.js", () => ({
+jest.unstable_mockModule("../src/leetcode/leetcodeClient.js", () => ({
   fetchAllSubmissions: jest.fn(),
 }));
 
 // Mock gitClient — records calls without doing real git operations
-jest.unstable_mockModule("../src/gitClient.js", () => ({
+jest.unstable_mockModule("../src/git/gitClient.js", () => ({
   init: jest.fn(),
+  getRepoPath: jest.fn(() => '__test_repo_nonexistent__'),
   commit: jest.fn(),
+  commitReadme: jest.fn(),
   push: jest.fn(),
 }));
 
+// Mock readmeGenerator — so handler doesn't try to scan a non-existent repo
+jest.unstable_mockModule("../src/sync/readmeGenerator.js", () => ({
+  scanRepo: jest.fn(() => []),
+  generateReadme: jest.fn(() => '# README'),
+}));
+
 // Import AFTER mocking (required for ESM mocks)
-const { fetchAllSubmissions } = await import("../src/leetcodeClient.js");
-const gitClient = await import("../src/gitClient.js");
-const { execute } = await import("../src/handler.js");
+const { fetchAllSubmissions } = await import("../src/leetcode/leetcodeClient.js");
+const gitClient = await import("../src/git/gitClient.js");
+const { execute } = await import("../src/sync/handler.js");
 
 // ── Fake Data ───────────────────────────────────────────────────────────────
 // This is what a real LeetCode response would look like, but hardcoded
@@ -88,7 +96,7 @@ describe("handler.execute()", () => {
 
     // Assert: git.init was called once with the repo URL
     expect(gitClient.init).toHaveBeenCalledTimes(1);
-    expect(gitClient.init).toHaveBeenCalledWith(TEST_CONFIG.repoUrl);
+    expect(gitClient.init).toHaveBeenCalledWith(TEST_CONFIG.repoUrl, null);
 
     // Assert: git.commit was called once per submission (3 times)
     expect(gitClient.commit).toHaveBeenCalledTimes(3);

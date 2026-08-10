@@ -14,8 +14,8 @@
 
 import fs   from 'fs';
 import path from 'path';
-import { fetchAllSubmissions } from "./leetcodeClient.js";
-import * as gitClient from "./gitClient.js";
+import { fetchAllSubmissions } from "../leetcode/leetcodeClient.js";
+import * as gitClient from "../git/gitClient.js";
 import { scanRepo, generateReadme } from "./readmeGenerator.js";
 
 /**

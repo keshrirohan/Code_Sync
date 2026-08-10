@@ -28,7 +28,7 @@ describe("config.parseArgs()", () => {
     ];
 
     // Dynamic import to get fresh module
-    const { parseArgs } = await import("../src/config.js");
+    const { parseArgs } = await import("../src/cli/config.js");
     const config = parseArgs();
 
     expect(config.cookie).toBe("LEETCODE_SESSION=abc123");
@@ -47,7 +47,7 @@ describe("config.parseArgs()", () => {
       "--dry-run",
     ];
 
-    const { parseArgs } = await import("../src/config.js");
+    const { parseArgs } = await import("../src/cli/config.js");
     const config = parseArgs();
 
     expect(config.dryRun).toBe(true);
@@ -67,7 +67,7 @@ describe("config.parseArgs()", () => {
     });
     jest.spyOn(console, "error").mockImplementation(() => {});
 
-    const { parseArgs } = await import("../src/config.js");
+    const { parseArgs } = await import("../src/cli/config.js");
 
     expect(() => parseArgs()).toThrow("process.exit(1)");
     expect(mockExit).toHaveBeenCalledWith(1);
@@ -89,7 +89,7 @@ describe("config.parseArgs()", () => {
     });
     jest.spyOn(console, "error").mockImplementation(() => {});
 
-    const { parseArgs } = await import("../src/config.js");
+    const { parseArgs } = await import("../src/cli/config.js");
 
     expect(() => parseArgs()).toThrow("process.exit(1)");
     expect(mockExit).toHaveBeenCalledWith(1);

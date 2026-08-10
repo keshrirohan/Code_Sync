@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { parseArgs } from "./config.js";
-import { execute } from "./handler.js";
+import { execute } from "../sync/handler.js";
 
 // Parse CLI args, run the sync, catch any top-level errors
 const config = parseArgs();
