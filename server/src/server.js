@@ -27,7 +27,7 @@ async function boot() {
     // Non-fatal — auto-sync just won't run until manually enabled
   }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     logger.info(`CodeSync server running on port ${PORT}`);
     logger.info(`  Backend URL:  ${BACKEND_URL}`);
     logger.info(`  Frontend URL: ${FRONTEND_URL}`);
