@@ -96,50 +96,34 @@ Open **[http://localhost:3055](http://localhost:3055)** in your browser.
 
 ### Step 2 — Connect LeetCode
 
-**Option A — Chrome Extension (easiest)**
-See [Chrome Extension](#chrome-extension) below. One click, done.
+**Option A — Chrome Extension (1-Click Recommended)**
+1. Load the `extension/` folder in `chrome://extensions` (see [Chrome Extension](#chrome-extension) section below).
+2. Log in to [leetcode.com](https://leetcode.com).
+3. Click the CodeSync toolbar icon and click **"Connect LeetCode Account"** — session cookies are captured automatically!
 
-**Option B — Paste the cookie manually**
-1. Go to [leetcode.com](https://leetcode.com) and log in
-2. Open DevTools (`F12`) → **Application** → **Cookies** → `https://leetcode.com`
-3. Copy the `LEETCODE_SESSION` and `csrftoken` values
-4. Paste into the dashboard as:
+**Option B — Paste Cookie or Session ID Manually**
+1. Go to [leetcode.com](https://leetcode.com) and log in.
+2. Open DevTools (`F12`) → **Application** → **Cookies** → `https://leetcode.com`.
+3. Copy the `LEETCODE_SESSION` value (or whole cookie string).
+4. Paste it into the dashboard **Connect** page:
    ```
    LEETCODE_SESSION=eyJ...; csrftoken=abc123
    ```
+   *(Raw session token `eyJ...` is also supported)*
 
 ---
 
-### Step 3 — Connect GitHub (OAuth)
+### Step 3 — Connect GitHub
 
-> **One-time setup** — takes about 2 minutes. After that, it's one click forever.
+**Option A — Personal Access Token (1-Click Instant Setup)**
+1. Click **[Generate Token on GitHub](https://github.com/settings/tokens/new?description=CodeSync&scopes=repo)** (pre-selected with `repo` scope).
+2. Click **Generate token** and copy the token (`ghp_...`).
+3. Paste the token into the **Connect** page → **GitHub** section and click **Connect with Token**.
 
-#### Register a GitHub OAuth App
-
-1. Go to **[GitHub → Settings → Developer settings → OAuth Apps → New OAuth App](https://github.com/settings/applications/new)**
-2. Fill in the form:
-
-   | Field | Value |
-   |-------|-------|
-   | Application name | `CodeSync` (or anything) |
-   | Homepage URL | `http://localhost:3055` |
-   | Authorization callback URL | `http://localhost:3055/api/auth/github/callback` |
-
-3. Click **Register application**
-4. Copy the **Client ID**
-5. Click **Generate a new client secret** → copy it
-
-#### Configure in the Dashboard
-
-In the dashboard → **Connect** page → GitHub card:
-- Paste your **Client ID** and **Client Secret**
-- Click **Save & Enable Sign-in**
-
-#### Sign in
-
-Click **Sign in with GitHub** → GitHub's consent screen opens → click **Authorize** → you're redirected back and signed in automatically.
-
-> **PAT fallback**: A "Use a Personal Access Token instead" link is always available if you prefer.
+**Option B — GitHub OAuth App**
+1. Go to **[GitHub → Developer Settings → OAuth Apps → New](https://github.com/settings/applications/new)**.
+2. Set Homepage URL to `http://localhost:3055` and Authorization Callback URL to `http://localhost:3055/api/auth/github/callback`.
+3. Save Client ID and Client Secret in the Dashboard → Click **Sign in with GitHub**.
 
 ---
 
@@ -173,9 +157,9 @@ A live terminal streams real-time progress. When done, check your GitHub repo fo
 1. Go to [leetcode.com](https://leetcode.com) — make sure you're logged in
 2. Click the **CodeSync icon** in the toolbar
 3. The popup shows:
-   - 🟢 **LeetCode** — green if you're logged in
+   - 🟢 **LeetCode Account** — shows your username when connected
    - 🟢 **Dashboard** — green if `npm run dashboard` is running
-4. Click **"Send Cookie to Dashboard"** — done!
+4. Click **"Connect LeetCode Account"** — auto-captures and links your account!
 
 ---
 

@@ -52,7 +52,7 @@ function LeetCodeCard({ config, onUpdate }) {
           <div className="card-icon lc">🟡</div>
           <div>
             <div className="card-label">LeetCode</div>
-            <div className="card-sublabel">Session cookie</div>
+            <div className="card-sublabel">Session cookie or extension</div>
           </div>
         </div>
         <div className={`status-badge ${isConnected ? 'connected' : 'disconnected'}`}>
@@ -80,19 +80,28 @@ function LeetCodeCard({ config, onUpdate }) {
         </>
       ) : (
         <form onSubmit={handleConnect}>
+          <div className="alert info mb-16" style={{ fontSize: 12, lineHeight: 1.6 }}>
+            <span className="alert-icon">ℹ️</span>
+            <div>
+              <strong>Quick setup instructions:</strong>
+              <br />
+              1. Log in to <a href="https://leetcode.com" target="_blank" rel="noreferrer">leetcode.com ↗</a>
+              <br />
+              2. Open DevTools (<code>F12</code>) → <strong>Application</strong> → <strong>Cookies</strong> → <code>https://leetcode.com</code>
+              <br />
+              3. Copy the <code>LEETCODE_SESSION</code> cookie value and paste it below.
+            </div>
+          </div>
+
           <div className="form-group">
-            <label className="form-label">Session Cookie</label>
+            <label className="form-label">Session Cookie or Session ID</label>
             <textarea
               className="textarea"
-              rows={3}
-              placeholder="LEETCODE_SESSION=eyJhbGc...; csrftoken=abc123..."
+              rows={2}
+              placeholder="LEETCODE_SESSION=eyJhbGc... or eyJhbGc..."
               value={cookie}
               onChange={e => setCookie(e.target.value)}
             />
-            <div className="form-hint">
-              Get this from LeetCode → F12 → Application → Cookies.{' '}
-              <a href="https://leetcode.com" target="_blank" rel="noreferrer">Open LeetCode ↗</a>
-            </div>
           </div>
 
           {error   && <div className="alert error mb-16"><span className="alert-icon">✕</span>{error}</div>}
@@ -102,7 +111,7 @@ function LeetCodeCard({ config, onUpdate }) {
             <button className="btn btn-primary" type="submit" disabled={loading || !cookie.trim()}>
               {loading ? <span className="spinner" /> : '⚡'} Validate &amp; Connect
             </button>
-            <span className="text-sm text-muted">Or use the Chrome Extension →</span>
+            <span className="text-sm text-muted">Or use Chrome Extension →</span>
           </div>
         </form>
       )}
@@ -140,11 +149,10 @@ function GitHubOAuthSetup({ onConfigured }) {
 
   return (
     <div>
-      {/* Step-by-step instructions */}
       <div className="alert info mb-16">
         <span className="alert-icon">ℹ️</span>
         <div>
-          <strong>One-time setup:</strong> Create a free GitHub OAuth App to enable sign-in.
+          <strong>GitHub OAuth App Setup:</strong>
         </div>
       </div>
 
@@ -159,19 +167,19 @@ function GitHubOAuthSetup({ onConfigured }) {
             Go to{' '}
             <a href="https://github.com/settings/applications/new" target="_blank" rel="noreferrer"
               style={{ color: 'var(--violet-light)' }}>
-              GitHub → Developer Settings → OAuth Apps → New
+              GitHub → Developer Settings → OAuth Apps → New OAuth App
             </a>
           </div>
           <div><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>2.</span>{' '}
-            Fill in any <strong>Application name</strong>, Homepage URL:{' '}
+            Application name: <strong>CodeSync</strong>, Homepage URL:{' '}
             <code style={{ fontFamily: 'monospace', color: 'var(--emerald-light)' }}>http://localhost:3055</code>
           </div>
           <div><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>3.</span>{' '}
-            Set <strong>Callback URL</strong> to:{' '}
+            Authorization callback URL:{' '}
             <code style={{ fontFamily: 'monospace', color: 'var(--emerald-light)' }}>http://localhost:3055/api/auth/github/callback</code>
           </div>
           <div><span style={{ color: 'var(--violet-light)', fontWeight: 600 }}>4.</span>{' '}
-            Copy the <strong>Client ID</strong> and generate a <strong>Client Secret</strong> below.
+            Paste the <strong>Client ID</strong> and generate/paste a <strong>Client Secret</strong> below.
           </div>
         </div>
       </div>
@@ -203,7 +211,7 @@ function GitHubOAuthSetup({ onConfigured }) {
           type="submit"
           disabled={saving || !clientId.trim() || !clientSecret.trim()}
         >
-          {saving ? <span className="spinner" /> : '💾'} Save & Enable Sign-in
+          {saving ? <span className="spinner" /> : '💾'} Save &amp; Enable Sign-in
         </button>
       </form>
     </div>
@@ -212,7 +220,7 @@ function GitHubOAuthSetup({ onConfigured }) {
 
 function GitHubCard({ config, onUpdate }) {
   const [oauthStatus, setOauthStatus] = useState(null); // { configured, connected }
-  const [usePat, setUsePat]           = useState(false);
+  const [usePat, setUsePat]           = useState(true); // Default to PAT for fast token auth
   const [token, setToken]             = useState('');
   const [showToken, setShowToken]     = useState(false);
   const [loading, setLoading]         = useState(false);
@@ -277,7 +285,7 @@ function GitHubCard({ config, onUpdate }) {
           <div>
             <div className="card-label">GitHub</div>
             <div className="card-sublabel">
-              {oauthStatus?.configured ? 'OAuth App' : 'Personal Access Token'}
+              {usePat ? 'Personal Access Token' : 'OAuth App'}
             </div>
           </div>
         </div>
@@ -297,7 +305,7 @@ function GitHubCard({ config, onUpdate }) {
             }
             <div>
               <div className="profile-name">@{config.githubUsername}</div>
-              <div className="profile-platform">GitHub account · OAuth</div>
+              <div className="profile-platform">GitHub account connected</div>
             </div>
           </div>
           <div className="alert success mb-16">
@@ -308,30 +316,57 @@ function GitHubCard({ config, onUpdate }) {
             {loading ? <span className="spinner" /> : '✕'} Disconnect
           </button>
         </>
-      ) : oauthStatus === null ? (
-        /* ── Loading ── */
-        <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-3)' }}>
-          <div className="loading-spinner" style={{ margin: '0 auto 8px' }} />
-          <p style={{ fontSize: 12 }}>Checking OAuth status...</p>
-        </div>
-      ) : !oauthStatus.configured ? (
-        /* ── OAuth not set up yet ── */
+      ) : (
+        /* ── Not connected state ── */
         <>
+          {/* Method selector tabs */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${usePat ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setUsePat(true)}
+              style={{ flex: 1 }}
+            >
+              🔑 Personal Access Token
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${!usePat ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setUsePat(false)}
+              style={{ flex: 1 }}
+            >
+              🌐 OAuth Login
+            </button>
+          </div>
+
           {usePat ? (
-            // PAT fallback
+            /* ── PAT Mode ── */
             <form onSubmit={handlePATConnect}>
-              <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span className="form-label" style={{ margin: 0 }}>Personal Access Token</span>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setUsePat(false)}>
-                  ← Use OAuth instead
-                </button>
+              <div className="alert info mb-16" style={{ fontSize: 12, lineHeight: 1.6 }}>
+                <span className="alert-icon">💡</span>
+                <div>
+                  <strong>Recommended (Instant 1-Click Setup):</strong>
+                  <br />
+                  Generate a Personal Access Token with <code>repo</code> scope to allow CodeSync to push to your repository.
+                  <br />
+                  <a
+                    href="https://github.com/settings/tokens/new?description=CodeSync&scopes=repo"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: 'var(--violet-light)', fontWeight: 600, marginTop: 4, display: 'inline-block' }}
+                  >
+                    Click here to generate token on GitHub ↗
+                  </a>
+                </div>
               </div>
+
               <div className="form-group">
+                <label className="form-label">Personal Access Token</label>
                 <div style={{ position: 'relative' }}>
                   <input
                     type={showToken ? 'text' : 'password'}
                     className="input"
-                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx or github_pat_..."
                     value={token}
                     onChange={e => setToken(e.target.value)}
                     style={{ paddingRight: 60 }}
@@ -341,77 +376,34 @@ function GitHubCard({ config, onUpdate }) {
                     {showToken ? 'Hide' : 'Show'}
                   </button>
                 </div>
-                <div className="form-hint">
-                  Needs <code style={{ fontFamily: 'monospace', color: 'var(--violet-light)' }}>repo</code> scope.{' '}
-                  <a href="https://github.com/settings/tokens/new?description=CodeSync&scopes=repo" target="_blank" rel="noreferrer">Create token ↗</a>
-                </div>
               </div>
+
               {patError && <div className="alert error mb-16"><span className="alert-icon">✕</span>{patError}</div>}
               <button className="btn btn-primary" type="submit" disabled={loading || !token.trim()}>
                 {loading ? <span className="spinner" /> : '🔑'} Connect with Token
               </button>
             </form>
+          ) : oauthStatus?.configured ? (
+            /* ── OAuth Configured Mode ── */
+            <>
+              <div className="alert info mb-16">
+                <span className="alert-icon">✅</span>
+                <span>OAuth App configured. Click below to sign in with GitHub.</span>
+              </div>
+              <a
+                href="/api/auth/github/login"
+                className="btn btn-primary btn-lg"
+                style={{ display: 'flex', textDecoration: 'none', marginBottom: 12 }}
+              >
+                <GitHubIcon />
+                Sign in with GitHub
+              </a>
+            </>
           ) : (
-            // OAuth setup form
+            /* ── OAuth Setup Form ── */
             <GitHubOAuthSetup onConfigured={() => {
               setOauthStatus(s => ({ ...s, configured: true }));
             }} />
-          )}
-          {!usePat && (
-            <div style={{ marginTop: 14, textAlign: 'center' }}>
-              <button className="btn btn-sm btn-secondary" onClick={() => setUsePat(true)}>
-                Use a Personal Access Token instead
-              </button>
-            </div>
-          )}
-        </>
-      ) : (
-        /* ── OAuth configured, not connected ── */
-        <>
-          <div className="alert info mb-16">
-            <span className="alert-icon">✅</span>
-            <span>OAuth App configured. Click below to sign in.</span>
-          </div>
-
-          {/* Sign in with GitHub button */}
-          <a
-            href="/api/auth/github/login"
-            className="btn btn-primary btn-lg"
-            style={{ display: 'flex', textDecoration: 'none', marginBottom: 12 }}
-          >
-            <GitHubIcon />
-            Sign in with GitHub
-          </a>
-
-          {/* PAT fallback */}
-          {usePat ? (
-            <form onSubmit={handlePATConnect} style={{ marginTop: 16 }}>
-              <div className="form-group">
-                <label className="form-label">Personal Access Token (fallback)</label>
-                <input
-                  type={showToken ? 'text' : 'password'}
-                  className="input"
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                  value={token}
-                  onChange={e => setToken(e.target.value)}
-                />
-              </div>
-              {patError && <div className="alert error mb-16"><span className="alert-icon">✕</span>{patError}</div>}
-              <div className="flex-row">
-                <button className="btn btn-secondary" type="submit" disabled={loading || !token.trim()}>
-                  {loading ? <span className="spinner" /> : '🔑'} Connect
-                </button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setUsePat(false)}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div style={{ marginTop: 8, textAlign: 'center' }}>
-              <button className="btn btn-sm btn-secondary" onClick={() => setUsePat(true)}>
-                Use a token instead
-              </button>
-            </div>
           )}
         </>
       )}

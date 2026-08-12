@@ -25,29 +25,35 @@ const LEETCODE_API_URL = "https://leetcode.com/graphql";
  *
  * Without the header, POST requests return HTTP 400 even if the cookie is valid.
  */
-function extractCsrfToken(cookie) {
-  const match = cookie.match(/csrftoken=([^;]+)/);
-  return match ? match[1].trim() : "";
+function normalizeLeetcodeCookie(cookieStr) {
+  if (!cookieStr || typeof cookieStr !== 'string') return '';
+  let trimmed = cookieStr.trim();
+  if (!trimmed) return '';
+
+  if (!trimmed.includes('=')) {
+    trimmed = `LEETCODE_SESSION=${trimmed}`;
+  }
+  if (!trimmed.toLowerCase().includes('leetcode_session')) {
+    trimmed = `LEETCODE_SESSION=${trimmed}`;
+  }
+  if (!trimmed.includes('csrftoken=')) {
+    trimmed = `${trimmed}; csrftoken=leetcode`;
+  }
+  return trimmed;
 }
 
-/**
- * buildHeaders — Creates the HTTP headers needed for every LeetCode request.
- *
- * Input:  cookie (string) — the user's LeetCode session cookie
- * Output: an object with all required headers
- *
- * Why each header matters:
- *   Cookie       → authenticates the request (tells LeetCode who the user is)
- *   x-csrftoken  → LeetCode's CSRF protection for POST requests (must match cookie)
- *   User-Agent   → LeetCode rejects requests without a browser-like User-Agent
- *   Referer      → Additional CSRF check — must be the leetcode.com origin
- *   Content-Type → we're sending a JSON body containing a GraphQL query
- */
+function extractCsrfToken(cookie) {
+  if (!cookie) return 'leetcode';
+  const match = cookie.match(/csrftoken=([^;]+)/);
+  return (match && match[1].trim()) ? match[1].trim() : 'leetcode';
+}
+
 function buildHeaders(cookie) {
+  const normalized = normalizeLeetcodeCookie(cookie);
   return {
     "Content-Type": "application/json",
-    Cookie: cookie,
-    "x-csrftoken": extractCsrfToken(cookie),
+    Cookie: normalized,
+    "x-csrftoken": extractCsrfToken(normalized),
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

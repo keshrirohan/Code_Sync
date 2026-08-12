@@ -1,275 +1,168 @@
-// ─── CodeSync Popup ───────────────────────────────────────────────────────────
+// ─── CodeSync Extension Popup ─────────────────────────────────────────────────
 
 (async function () {
   "use strict";
 
-  const DEFAULT_BASE_URL = "http://localhost:3000";
+  const DEFAULT_BASE_URL = "http://localhost:3055";
 
-  // ─── DOM refs ──────────────────────────────────────────────────────────
-
-  const statusBadge      = document.getElementById("status-badge");
-  const statusText       = document.getElementById("status-text");
-  const userSection      = document.getElementById("user-section");
-  const userAvatar       = document.getElementById("user-avatar");
-  const userName         = document.getElementById("user-name");
-  const userGithub       = document.getElementById("user-github");
-  const authPrompt       = document.getElementById("auth-prompt");
-  const signinBtn        = document.getElementById("signin-btn");
-  const lastSyncSection  = document.getElementById("last-sync-section");
-  const syncStatusTag    = document.getElementById("sync-status-tag");
-  const syncProblemName  = document.getElementById("sync-problem-name");
-  const syncDifficulty   = document.getElementById("sync-difficulty");
-  const syncLanguage     = document.getElementById("sync-language");
-  const syncTime         = document.getElementById("sync-time");
-  const syncCommitLink   = document.getElementById("sync-commit-link");
-  const controlsSection  = document.getElementById("controls-section");
-  const autoSyncToggle   = document.getElementById("auto-sync-toggle");
-  const linksSection     = document.getElementById("links-section");
-  const dashboardLink    = document.getElementById("dashboard-link");
-  const settingsLink     = document.getElementById("settings-link");
-  const historyLink      = document.getElementById("history-link");
-  const serverUrlInput   = document.getElementById("server-url-input");
-  const saveUrlBtn       = document.getElementById("save-url-btn");
-  const noRepoWarning      = document.getElementById("no-repo-warning");
-  const noRepoSettingsLink = document.getElementById("no-repo-settings-link");
-  const debugErrorDot    = document.getElementById("debug-error-dot");
-  const debugLogList     = document.getElementById("debug-log-list");
-  const debugCount       = document.getElementById("debug-count");
-  const debugWebLink     = document.getElementById("debug-web-link");
-
-  // ─── Helpers ───────────────────────────────────────────────────────────
+  // DOM elements
+  const lcDot          = document.getElementById("lc-dot");
+  const lcVal          = document.getElementById("lc-val");
+  const dashDot        = document.getElementById("dash-dot");
+  const dashVal        = document.getElementById("dash-val");
+  const lastSyncBadge  = document.getElementById("last-sync-badge");
+  const autosyncToggle = document.getElementById("autosync-toggle");
+  const asSub          = document.getElementById("as-sub");
+  const asPulse        = document.getElementById("as-pulse");
+  const syncNowBtn     = document.getElementById("sync-now-btn");
+  const syncNowIcon    = document.getElementById("sync-now-icon");
+  const syncNowLabel   = document.getElementById("sync-now-label");
+  const openBtn        = document.getElementById("open-btn");
+  const lcBtn          = document.getElementById("lc-btn");
+  const cookieSection  = document.getElementById("cookie-section");
+  const sendBtn        = document.getElementById("send-btn");
+  const sendLabel      = document.getElementById("send-label");
+  const toast          = document.getElementById("toast");
+  const toastIcon      = document.getElementById("toast-icon");
+  const toastMsg       = document.getElementById("toast-msg");
 
   async function getBaseUrl() {
     return new Promise((resolve) => {
-      chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL }, (r) => resolve(r.baseUrl));
+      chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL }, (r) => resolve((r.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '')));
     });
   }
 
-  function timeAgo(timestamp) {
-    const s = Math.floor((Date.now() - timestamp) / 1000);
-    if (s < 60)   return "Just now";
-    const m = Math.floor(s / 60);
-    if (m < 60)   return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24)   return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
+  function showToast(msg, isSuccess = true) {
+    toastIcon.textContent = isSuccess ? "✓" : "✕";
+    toastMsg.textContent  = msg;
+    toast.className       = `toast show ${isSuccess ? 'success' : 'error'}`;
+    setTimeout(() => { toast.className = "toast"; }, 3000);
   }
 
-  function setStatus(state, text) {
-    statusBadge.className = `status-badge status-${state}`;
-    statusText.textContent = text;
+  function setDot(el, valEl, status, text) {
+    if (status === 'ok') {
+      el.className = "status-dot dot-ok";
+      valEl.className = "status-val ok";
+    } else if (status === 'err') {
+      el.className = "status-dot dot-err";
+      valEl.className = "status-val err";
+    } else {
+      el.className = "status-dot dot-loading";
+      valEl.className = "status-val";
+    }
+    valEl.textContent = text;
   }
-
-  // ─── Set up links ──────────────────────────────────────────────────────
 
   const baseUrl = await getBaseUrl();
-  signinBtn.href        = baseUrl;
-  dashboardLink.href    = `${baseUrl}/dashboard`;
-  settingsLink.href     = `${baseUrl}/dashboard/settings`;
-  historyLink.href      = `${baseUrl}/dashboard/history`;
-  debugWebLink.href     = `${baseUrl}/dashboard/debug`;
-  serverUrlInput.value  = baseUrl;
 
-  // ─── Tab switching ─────────────────────────────────────────────────────
+  if (openBtn) openBtn.addEventListener("click", () => chrome.tabs.create({ url: baseUrl }));
+  if (lcBtn)   lcBtn.addEventListener("click",   () => chrome.tabs.create({ url: "https://leetcode.com" }));
 
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const tab = btn.dataset.tab; 
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("tab-active"));
-      btn.classList.add("tab-active");
-      document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
-      document.getElementById(`tab-${tab}`).classList.remove("hidden");
-      if (tab === "debug") loadDebugLogs();
-    });
-  });
-
-  // ─── Auth check ────────────────────────────────────────────────────────
-
-  try {
-    const authResponse = await chrome.runtime.sendMessage({ type: "CHECK_AUTH" });
-
-    if (authResponse?.success && authResponse?.data) {
-      const user = authResponse.data;
-      setStatus("connected", "Connected");
-
-      userSection.classList.remove("hidden");
-      userName.textContent   = user.name || user.email || "User";
-      userGithub.textContent = user.githubUsername ? `@${user.githubUsername}` : user.email || "";
-      userAvatar.src = user.image ||
-        `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || "U")}&background=6366f1&color=fff&size=72`;
-
-      controlsSection.classList.remove("hidden");
-      linksSection.classList.remove("hidden");
-
-      // ── Check repo is configured and show warning if not ──────────────
-      try {
-        const settingsResp = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
-        const selectedRepo = settingsResp?.data?.selectedRepoFullName;
-        noRepoSettingsLink.href = `${baseUrl}/dashboard/settings`;
-        if (!selectedRepo) {
-          noRepoWarning.classList.remove("hidden");
-        } else {
-          noRepoWarning.classList.add("hidden");
-        }
-      } catch { /* non-fatal */ }
-
-      const syncState = await chrome.runtime.sendMessage({ type: "GET_AUTO_SYNC" });
-      autoSyncToggle.checked = syncState?.autoSync !== false;
-
-      await loadLastSync();
-    } else {
-      setStatus("disconnected", "Not connected");
-      authPrompt.classList.remove("hidden");
-    }
-  } catch (err) {
-    console.error("Popup auth check failed:", err);
-    setStatus("disconnected", "Error");
-    authPrompt.classList.remove("hidden");
-  }
-
-  // ─── Last sync card ────────────────────────────────────────────────────
-
-  async function loadLastSync() {
+  // Check Connection Status
+  async function checkStatus() {
     try {
-      const lastSync = await chrome.runtime.sendMessage({ type: "GET_LAST_SYNC" });
-      if (!lastSync?.problemName) return;
+      const response = await chrome.runtime.sendMessage({ type: "CHECK_AUTH" });
+      if (response?.success && response?.data) {
+        const config = response.data;
+        setDot(dashDot, dashVal, 'ok', 'Connected');
+        if (syncNowBtn) syncNowBtn.disabled = false;
 
-      lastSyncSection.classList.remove("hidden");
-      syncProblemName.textContent = lastSync.problemName;
-
-      const status = (lastSync.status || "SUCCESS").toUpperCase();
-      syncStatusTag.textContent = status;
-      syncStatusTag.className   = `tag tag-${status.toLowerCase()}`;
-
-      const diff = lastSync.difficulty || "Unknown";
-      syncDifficulty.textContent = diff;
-      syncDifficulty.className   = `difficulty-tag difficulty-${diff.toLowerCase()}`;
-
-      syncLanguage.textContent = (lastSync.language || "").toUpperCase();
-      syncTime.textContent     = lastSync.timestamp ? timeAgo(lastSync.timestamp) : "";
-
-      if (lastSync.commitUrl && status === "SUCCESS") {
-        syncCommitLink.href = lastSync.commitUrl;
-        syncCommitLink.classList.remove("hidden");
+        if (config.hasLeetcodeCookie) {
+          setDot(lcDot, lcVal, 'ok', config.leetcodeUsername ? `@${config.leetcodeUsername}` : 'Connected');
+          if (cookieSection) cookieSection.style.display = "none";
+        } else {
+          setDot(lcDot, lcVal, 'err', 'Not connected');
+          if (cookieSection) cookieSection.style.display = "block";
+        }
       } else {
-        syncCommitLink.classList.add("hidden");
+        setDot(dashDot, dashVal, 'err', 'Offline');
+        setDot(lcDot,   lcVal,   'err', 'Offline');
+        if (syncNowBtn) syncNowBtn.disabled = true;
+        if (cookieSection) cookieSection.style.display = "block";
       }
-    } catch (err) {
-      console.error("loadLastSync error:", err);
+    } catch {
+      setDot(dashDot, dashVal, 'err', 'Offline');
+      setDot(lcDot,   lcVal,   'err', 'Unknown');
+      if (syncNowBtn) syncNowBtn.disabled = true;
     }
   }
 
-  // ─── Auto-sync toggle ──────────────────────────────────────────────────
-
-  autoSyncToggle.addEventListener("change", async () => {
-    await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled: autoSyncToggle.checked });
-  });
-
-  // ─── Server URL save ───────────────────────────────────────────────────
-
-  saveUrlBtn.addEventListener("click", async () => {
-    const newUrl = serverUrlInput.value.trim().replace(/\/$/, "");
-    if (!newUrl) return;
-    await chrome.storage.sync.set({ baseUrl: newUrl });
-
-    signinBtn.href     = newUrl;
-    dashboardLink.href = `${newUrl}/dashboard`;
-    settingsLink.href  = `${newUrl}/dashboard/settings`;
-    historyLink.href   = `${newUrl}/dashboard/history`;
-    debugWebLink.href  = `${newUrl}/dashboard/debug`;
-
-    saveUrlBtn.textContent = "Saved ✓";
-    saveUrlBtn.classList.add("saved");
-    setTimeout(() => {
-      saveUrlBtn.textContent = "Save";
-      saveUrlBtn.classList.remove("saved");
-    }, 2000);
-  });
-
-  // ─── Debug tab ─────────────────────────────────────────────────────────
-
-  let activeFilter = "ALL";
-  let allLogs = [];
-
-  async function loadDebugLogs() {
-    const resp = await chrome.runtime.sendMessage({ type: "GET_LOGS" });
-    allLogs = resp?.logs ?? [];
-    renderLogs();
-
-    // Red dot on tab if any errors
-    const hasErrors = allLogs.some((l) => l.level === "error");
-    debugErrorDot.classList.toggle("hidden", !hasErrors);
-  }
-
-  function renderLogs() {
-    const filtered = activeFilter === "ALL"
-      ? allLogs
-      : allLogs.filter((l) => l.level === activeFilter);
-
-    debugCount.textContent = `${filtered.length} entr${filtered.length === 1 ? "y" : "ies"}`;
-
-    if (filtered.length === 0) {
-      debugLogList.innerHTML = '<div class="debug-empty">No log entries match this filter.</div>';
-      return;
+  // Load Auto-sync setting
+  try {
+    const autoSyncResp = await chrome.runtime.sendMessage({ type: "GET_AUTO_SYNC" });
+    if (autosyncToggle) {
+      autosyncToggle.checked = autoSyncResp?.autoSync !== false;
+      if (asSub) asSub.className = autosyncToggle.checked ? "autosync-sub active" : "autosync-sub";
+      if (asPulse) asPulse.className = autosyncToggle.checked ? "pulse-dot" : "";
     }
+  } catch {}
 
-    debugLogList.innerHTML = filtered.map((entry) => {
-      const levelClass = `log-${entry.level}`;
-      const source     = entry.source === "background" ? "bg" : entry.source === "content" ? "cs" : "??";
-      const ts         = new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-      // Extra detail line
-      let detail = "";
-      if (entry.problem) detail += entry.problem;
-      if (entry.language) detail += detail ? ` · ${entry.language}` : entry.language;
-      if (entry.error) detail += `\n${entry.error}`;
-
-      return `
-        <div class="log-row ${levelClass}">
-          <div class="log-header">
-            <span class="log-badge log-badge-${entry.level}">${entry.level.toUpperCase()}</span>
-            <span class="log-source">[${source}]</span>
-            <span class="log-event">${entry.event}</span>
-            <span class="log-ts">${ts}</span>
-          </div>
-          ${detail ? `<div class="log-detail">${detail.replace(/\n/g, "<br>")}</div>` : ""}
-        </div>
-      `;
-    }).join("");
-  }
-
-  // Filter buttons
-  document.querySelectorAll(".debug-filter-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      activeFilter = btn.dataset.filter;
-      document.querySelectorAll(".debug-filter-btn").forEach((b) => b.classList.remove("debug-filter-active"));
-      btn.classList.add("debug-filter-active");
-      renderLogs();
+  if (autosyncToggle) {
+    autosyncToggle.addEventListener("change", async () => {
+      const enabled = autosyncToggle.checked;
+      await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled });
+      if (asSub) asSub.className = enabled ? "autosync-sub active" : "autosync-sub";
+      if (asPulse) asPulse.className = enabled ? "pulse-dot" : "";
+      showToast(enabled ? "Auto-sync enabled" : "Auto-sync disabled", true);
     });
-  });
-
-  // Refresh
-  document.getElementById("debug-refresh-btn").addEventListener("click", loadDebugLogs);
-
-  // Copy JSON
-  document.getElementById("debug-copy-btn").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(JSON.stringify(allLogs, null, 2));
-    const btn = document.getElementById("debug-copy-btn");
-    btn.textContent = "Copied ✓";
-    setTimeout(() => { btn.innerHTML = `<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`; }, 2000);
-  });
-
-  // Clear
-  document.getElementById("debug-clear-btn").addEventListener("click", async () => {
-    await chrome.runtime.sendMessage({ type: "CLEAR_LOGS" });
-    allLogs = [];
-    renderLogs();
-    debugErrorDot.classList.add("hidden");
-  });
-
-  // Load logs on open if debug tab is already active somehow
-  if (!document.getElementById("tab-debug").classList.contains("hidden")) {
-    loadDebugLogs();
   }
 
+  // Connect LeetCode Button (Auto-capture)
+  if (sendBtn) {
+    sendBtn.addEventListener("click", async () => {
+      sendBtn.disabled = true;
+      if (sendLabel) sendLabel.textContent = "Capturing cookie...";
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "CAPTURE_LEETCODE_COOKIE" });
+        if (result?.success) {
+          showToast(`Connected as ${result.username}!`, true);
+          await checkStatus();
+        } else {
+          showToast(result?.error || "Cookie capture failed. Ensure you are logged in to leetcode.com", false);
+        }
+      } catch (err) {
+        showToast(err.message || "Failed to capture cookie", false);
+      } finally {
+        sendBtn.disabled = false;
+        if (sendLabel) sendLabel.textContent = "Connect LeetCode Account";
+      }
+    });
+  }
+
+  // Sync Now Button
+  if (syncNowBtn) {
+    syncNowBtn.addEventListener("click", async () => {
+      syncNowBtn.disabled = true;
+      if (syncNowIcon) syncNowIcon.className = "spinner";
+      if (syncNowLabel) syncNowLabel.textContent = "Syncing...";
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "TRIGGER_SYNC" });
+        if (res?.success) {
+          showToast("Sync triggered successfully!", true);
+        } else {
+          showToast(res?.data?.error || "Sync failed", false);
+        }
+      } catch (err) {
+        showToast(err.message || "Sync failed", false);
+      } finally {
+        syncNowBtn.disabled = false;
+        if (syncNowIcon) {
+          syncNowIcon.className = "";
+          syncNowIcon.textContent = "🔄";
+        }
+        if (syncNowLabel) syncNowLabel.textContent = "Sync Now (only new problems)";
+      }
+    });
+  }
+
+  // Load last sync
+  try {
+    const lastSync = await chrome.runtime.sendMessage({ type: "GET_LAST_SYNC" });
+    if (lastSync?.problemName && lastSyncBadge) {
+      lastSyncBadge.style.display = "inline-block";
+      lastSyncBadge.textContent = `Last: ${lastSync.problemName}`;
+    }
+  } catch {}
+
+  await checkStatus();
 })();

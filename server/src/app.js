@@ -97,18 +97,37 @@ app.use(express.static(FRONTEND_DIST));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function normalizeLeetcodeCookie(cookieStr) {
+  if (!cookieStr || typeof cookieStr !== 'string') return '';
+  let trimmed = cookieStr.trim();
+  if (!trimmed) return '';
+
+  if (!trimmed.includes('=')) {
+    trimmed = `LEETCODE_SESSION=${trimmed}`;
+  }
+  if (!trimmed.toLowerCase().includes('leetcode_session')) {
+    trimmed = `LEETCODE_SESSION=${trimmed}`;
+  }
+  if (!trimmed.includes('csrftoken=')) {
+    trimmed = `${trimmed}; csrftoken=leetcode`;
+  }
+  return trimmed;
+}
+
 function extractCsrfToken(cookie) {
+  if (!cookie) return 'leetcode';
   const match = cookie.match(/csrftoken=([^;]+)/);
-  return match ? match[1].trim() : '';
+  return (match && match[1].trim()) ? match[1].trim() : 'leetcode';
 }
 
 async function validateLeetcodeCookie(cookie) {
+  const normalized = normalizeLeetcodeCookie(cookie);
   const res = await fetch('https://leetcode.com/graphql', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Cookie: cookie,
-      'x-csrftoken': extractCsrfToken(cookie),
+      Cookie: normalized,
+      'x-csrftoken': extractCsrfToken(normalized),
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Referer: 'https://leetcode.com',
       Origin:  'https://leetcode.com',
@@ -146,13 +165,14 @@ app.get('/api/config', async (req, res) => {
 async function handleLeetcodeAuth(req, res) {
   const { cookie } = req.body;
   if (!cookie) return res.status(400).json({ error: 'Cookie is required' });
+  const normalized = normalizeLeetcodeCookie(cookie);
   try {
-    const userStatus = await validateLeetcodeCookie(cookie);
+    const userStatus = await validateLeetcodeCookie(normalized);
     if (!userStatus?.isSignedIn)
       return res.status(401).json({ valid: false, error: 'Invalid or expired cookie' });
 
     const cfg = await loadConfig();
-    cfg.leetcodeCookie   = cookie;
+    cfg.leetcodeCookie   = normalized;
     cfg.leetcodeUsername = userStatus.username;
     await saveConfig(cfg);
 

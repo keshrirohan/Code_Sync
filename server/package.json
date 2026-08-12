@@ -12,7 +12,7 @@
     "start": "node src/server.js",
     "dev": "node src/server.js",
     "cli": "node src/cli/index.js",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "npx --node-options=\"--experimental-vm-modules\" jest"
   },
   "dependencies": {
     "bcryptjs": "3.0.3",
