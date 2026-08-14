@@ -105,31 +105,54 @@ export default function Sidebar({ page, setPage, config, isFullyConnected }) {
         <div className="connection-card">
           <div className="connection-title">Status</div>
 
-          <div className="connection-row">
-            <div className={`conn-dot ${lcConnected ? 'ok' : 'off'}`} />
-            <span className="conn-label">LeetCode</span>
-            <span className={`conn-value${lcConnected ? ' ok' : ''}`}>
-              {lcConnected ? config.leetcodeUsername : 'Not connected'}
-            </span>
-          </div>
+          {!config ? (
+            /* Backend unreachable — show distinct offline state */
+            <>
+              <div className="connection-row">
+                <div className="conn-dot off" />
+                <span className="conn-label">Backend</span>
+                <span className="conn-value" style={{ color: '#f87171' }}>Offline</span>
+              </div>
+              <div className="connection-row">
+                <div className="conn-dot off" />
+                <span className="conn-label">LeetCode</span>
+                <span className="conn-value">—</span>
+              </div>
+              <div className="connection-row">
+                <div className="conn-dot off" />
+                <span className="conn-label">GitHub</span>
+                <span className="conn-value">—</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="connection-row">
+                <div className={`conn-dot ${lcConnected ? 'ok' : 'off'}`} />
+                <span className="conn-label">LeetCode</span>
+                <span className={`conn-value${lcConnected ? ' ok' : ''}`}>
+                  {lcConnected ? config.leetcodeUsername : 'Not connected'}
+                </span>
+              </div>
 
-          <div className="connection-row">
-            <div className={`conn-dot ${ghConnected ? 'ok' : 'off'}`} />
-            <span className="conn-label">GitHub</span>
-            <span className={`conn-value${ghConnected ? ' ok' : ''}`}>
-              {ghConnected ? config.githubUsername : 'Not connected'}
-            </span>
-          </div>
+              <div className="connection-row">
+                <div className={`conn-dot ${ghConnected ? 'ok' : 'off'}`} />
+                <span className="conn-label">GitHub</span>
+                <span className={`conn-value${ghConnected ? ' ok' : ''}`}>
+                  {ghConnected ? config.githubUsername : 'Not connected'}
+                </span>
+              </div>
 
-          <div className="connection-row">
-            <div className={`conn-dot ${repoSelected ? 'ok' : 'warn'}`} />
-            <span className="conn-label">Repository</span>
-            <span className={`conn-value${repoSelected ? ' ok' : ''}`}>
-              {repoSelected
-                ? (config.targetRepoName?.split('/')[1] || 'Selected')
-                : 'None'}
-            </span>
-          </div>
+              <div className="connection-row">
+                <div className={`conn-dot ${repoSelected ? 'ok' : 'warn'}`} />
+                <span className="conn-label">Repository</span>
+                <span className={`conn-value${repoSelected ? ' ok' : ''}`}>
+                  {repoSelected
+                    ? (config.targetRepoName?.split('/')[1] || 'Selected')
+                    : 'None'}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </aside>

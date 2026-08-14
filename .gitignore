@@ -16,6 +16,7 @@ extension/node_modules/
 
 # Environment variables (contains secrets)
 .env
+server/.env
 
 # Legacy frontend path (keep for safety)
 frontend/node_modules/

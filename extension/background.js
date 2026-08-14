@@ -3,10 +3,26 @@
 // ============================================================================
 
 const DEFAULT_SERVER = 'http://localhost:3055';
+const FETCH_TIMEOUT_MS = 8000;
 
 async function getServerUrl() {
   const cfg = await chrome.storage.sync.get({ baseUrl: DEFAULT_SERVER });
   return (cfg.baseUrl || DEFAULT_SERVER).replace(/\/$/, '');
+}
+
+/**
+ * fetchWithTimeout — Wraps fetch with an AbortController timeout
+ * to prevent indefinite hangs in the service worker.
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function addLog(level, event, extra = {}) {
@@ -39,7 +55,7 @@ async function captureLeetCodeCookie() {
     }
 
     const serverUrl = await getServerUrl();
-    const res = await fetch(`${serverUrl}/api/auth/leetcode-from-extension`, {
+    const res = await fetchWithTimeout(`${serverUrl}/api/auth/leetcode-from-extension`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cookie: cookieStr }),
@@ -48,14 +64,22 @@ async function captureLeetCodeCookie() {
     const data = await res.json();
     if (data.valid) {
       await addLog('info', 'Cookie captured & synced', { username: data.username });
-      return { success: true, username: data.username, cookie: cookieStr };
+      // Never return the raw cookie — only the success flag and username
+      return { success: true, username: data.username };
     } else {
       await addLog('error', 'Cookie validation failed', { error: data.error });
       return { success: false, error: data.error || 'Cookie validation failed' };
     }
   } catch (err) {
     await addLog('error', 'Cookie capture exception', { error: err.message });
-    return { success: false, error: err.message };
+    const isTimeout = err.name === 'AbortError';
+    const isNetworkError = err.message.includes('Failed to fetch') || err.message.includes('NetworkError') || isTimeout;
+    return {
+      success: false,
+      error: isNetworkError
+        ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+        : err.message,
+    };
   }
 }
 
@@ -67,7 +91,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const serverUrl = await getServerUrl();
 
       if (msg.type === 'CHECK_AUTH') {
-        const res = await fetch(`${serverUrl}/api/config`);
+        // First check if backend is reachable via lightweight health endpoint
+        try {
+          const healthRes = await fetchWithTimeout(`${serverUrl}/api/health`, {}, 3000);
+          if (!healthRes.ok) throw new Error(`HTTP ${healthRes.status}`);
+        } catch (healthErr) {
+          const isTimeout = healthErr.name === 'AbortError';
+          sendResponse({
+            success: false,
+            error: isTimeout || healthErr.message.includes('Failed to fetch')
+              ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+              : `Backend error: ${healthErr.message}`,
+            backendOffline: true,
+          });
+          return;
+        }
+
+        const res = await fetchWithTimeout(`${serverUrl}/api/config`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         sendResponse({ success: true, data });
@@ -79,7 +119,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       else if (msg.type === 'GET_SETTINGS') {
-        const res = await fetch(`${serverUrl}/api/config`);
+        const res = await fetchWithTimeout(`${serverUrl}/api/config`);
         const data = await res.json();
         sendResponse({ success: true, data });
       }
@@ -95,7 +135,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       else if (msg.type === 'GET_LAST_SYNC') {
-        const res = await fetch(`${serverUrl}/api/sync/history`);
+        const res = await fetchWithTimeout(`${serverUrl}/api/history`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const history = await res.json();
         const last = Array.isArray(history) && history.length > 0 ? history[0] : null;
@@ -113,7 +153,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       else if (msg.type === 'TRIGGER_SYNC') {
-        const res = await fetch(`${serverUrl}/api/sync/trigger`, { method: 'POST' });
+        const res = await fetchWithTimeout(`${serverUrl}/api/sync/auto/trigger`, { method: 'POST' });
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       }
@@ -123,7 +163,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ success: true });
       }
     } catch (err) {
-      sendResponse({ success: false, error: err.message });
+      const isNetworkError = err.name === 'AbortError' || err.message.includes('Failed to fetch') || err.message.includes('NetworkError');
+      sendResponse({
+        success: false,
+        error: isNetworkError
+          ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+          : err.message,
+        backendOffline: isNetworkError,
+      });
     }
   })();
   return true;
@@ -141,7 +188,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function triggerServerAutoSync(source, titleSlug) {
   try {
     const serverUrl = await getServerUrl();
-    await fetch(`${serverUrl}/api/sync/auto/trigger`, {
+    await fetchWithTimeout(`${serverUrl}/api/sync/auto/trigger`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source, titleSlug: titleSlug || null }),

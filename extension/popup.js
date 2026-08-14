@@ -74,9 +74,16 @@
           setDot(lcDot, lcVal, 'err', 'Not connected');
           if (cookieSection) cookieSection.style.display = "block";
         }
+      } else if (response?.backendOffline) {
+        // Backend is not running — show specific message
+        setDot(dashDot, dashVal, 'err', 'Backend offline');
+        setDot(lcDot,   lcVal,   'err', 'Backend offline');
+        if (syncNowBtn) syncNowBtn.disabled = true;
+        if (cookieSection) cookieSection.style.display = "none";
       } else {
-        setDot(dashDot, dashVal, 'err', 'Offline');
-        setDot(lcDot,   lcVal,   'err', 'Offline');
+        // Backend responded but with an error (e.g. MongoDB down)
+        setDot(dashDot, dashVal, 'err', response?.error || 'Error');
+        setDot(lcDot,   lcVal,   'err', 'Unknown');
         if (syncNowBtn) syncNowBtn.disabled = true;
         if (cookieSection) cookieSection.style.display = "block";
       }

@@ -116,6 +116,15 @@ function normalizeLeetcodeCookie(cookieStr) {
   return trimmed;
 }
 
+// ── Error codes for structured LeetCode auth responses ───────────────────────
+const LC_ERROR = {
+  COOKIE_REQUIRED:  'COOKIE_REQUIRED',
+  SESSION_INVALID:  'SESSION_INVALID',
+  SESSION_EXPIRED:  'SESSION_EXPIRED',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  STORAGE_ERROR:    'STORAGE_ERROR',
+};
+
 function extractCsrfToken(cookie) {
   if (!cookie) return 'leetcode';
   const match = cookie.match(/csrftoken=([^;]+)/);
@@ -141,6 +150,44 @@ async function validateLeetcodeCookie(cookie) {
   return data?.data?.userStatus;
 }
 
+// ── API: Health (no MongoDB dependency — pure connectivity check) ─────────────
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, timestamp: new Date().toISOString(), uptime: process.uptime() });
+});
+
+// ── API: Status (backend + dependency + connection status) ────────────────────
+
+import mongoose from 'mongoose';
+
+app.get('/api/status', async (req, res) => {
+  const mongoState = mongoose.connection.readyState;
+  // 0=disconnected, 1=connected, 2=connecting, 3=disconnecting
+  const mongoStatus = mongoState === 1 ? 'connected' : mongoState === 2 ? 'connecting' : 'disconnected';
+
+  let leetcodeStatus = 'not_connected';
+  let githubStatus   = 'not_connected';
+
+  try {
+    const cfg = await loadConfig();
+    if (cfg.leetcodeCookie) {
+      leetcodeStatus = cfg.leetcodeUsername ? 'connected' : 'session_stored';
+    }
+    if (cfg.githubToken) {
+      githubStatus = cfg.githubUsername ? 'connected' : 'token_stored';
+    }
+  } catch {
+    // MongoDB might be down — statuses stay as defaults
+  }
+
+  res.json({
+    backend:  'online',
+    mongodb:  mongoStatus,
+    leetcode: leetcodeStatus,
+    github:   githubStatus,
+  });
+});
+
 // ── API: Config ───────────────────────────────────────────────────────────────
 
 app.get('/api/config', async (req, res) => {
@@ -158,7 +205,7 @@ app.get('/api/config', async (req, res) => {
     });
   } catch (err) {
     logger.error('GET /api/config', { err: err.message });
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Unable to load configuration', code: 'CONFIG_ERROR' });
   }
 });
 
@@ -166,12 +213,19 @@ app.get('/api/config', async (req, res) => {
 
 async function handleLeetcodeAuth(req, res) {
   const { cookie } = req.body;
-  if (!cookie) return res.status(400).json({ error: 'Cookie is required' });
+  if (!cookie || (typeof cookie === 'string' && !cookie.trim())) {
+    return res.status(400).json({ valid: false, error: 'Cookie is required', code: LC_ERROR.COOKIE_REQUIRED });
+  }
   const normalized = normalizeLeetcodeCookie(cookie);
   try {
     const userStatus = await validateLeetcodeCookie(normalized);
-    if (!userStatus?.isSignedIn)
-      return res.status(401).json({ valid: false, error: 'Invalid or expired cookie' });
+    if (!userStatus?.isSignedIn) {
+      return res.status(401).json({
+        valid: false,
+        error: 'LeetCode session is invalid or expired. Please log in again at leetcode.com.',
+        code:  userStatus ? LC_ERROR.SESSION_EXPIRED : LC_ERROR.SESSION_INVALID,
+      });
+    }
 
     const cfg = await loadConfig();
     cfg.leetcodeCookie   = normalized;
@@ -181,7 +235,15 @@ async function handleLeetcodeAuth(req, res) {
     res.json({ valid: true, username: userStatus.username });
   } catch (err) {
     logger.error('LeetCode auth', { err: err.message });
-    res.status(500).json({ valid: false, error: err.message });
+    // Distinguish network/validation errors from storage errors
+    const isNetworkError = err.message.includes('HTTP') || err.message.includes('fetch') || err.message.includes('ECONNREFUSED');
+    res.status(isNetworkError ? 502 : 500).json({
+      valid: false,
+      error: isNetworkError
+        ? 'Unable to validate session with LeetCode. Please try again.'
+        : 'Internal error while saving session.',
+      code: isNetworkError ? LC_ERROR.VALIDATION_ERROR : LC_ERROR.STORAGE_ERROR,
+    });
   }
 }
 
@@ -662,6 +724,10 @@ app.get('*', (req, res) => {
 // ── Centralised error handler (must be after all routes) ─────────────────────
 app.use(errorHandler);
 
-// Export for use by server.js
-export { app, PORT, BACKEND_URL, FRONTEND_URL, CALLBACK_URL, resetAutoSyncTimer };
+// Export for use by server.js and tests
+export {
+  app, PORT, BACKEND_URL, FRONTEND_URL, CALLBACK_URL, resetAutoSyncTimer,
+  normalizeLeetcodeCookie, extractCsrfToken, validateLeetcodeCookie,
+  LC_ERROR,
+};
 export default app;
