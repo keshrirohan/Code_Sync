@@ -34,10 +34,17 @@ const settingsSchema = new mongoose.Schema(
     targetRepoUrl:  { type: String, default: null },
     targetRepoName: { type: String, default: null },
 
-    // ── Auto-sync state ───────────────────────────────────────────────────
+    // ── Sync state ───────────────────────────────────────────────────────
     autoSyncEnabled:         { type: Boolean, default: false },
     autoSyncIntervalMinutes: { type: Number,  default: 10 },
     lastAutoSyncAt:          { type: Date,    default: null },
+
+    // ── Incremental sync — remembers what's already been pushed ──────────
+    // Array of titleSlugs that have been successfully synced to GitHub.
+    // Used by fetchSolvedQuestions to stop pagination early once it hits
+    // only already-synced problems, dramatically reducing API calls.
+    lastSyncedSlugs:  { type: [String], default: [] },
+    lastFullSyncAt:   { type: Date,     default: null },
   },
   {
     timestamps: true, // adds createdAt / updatedAt

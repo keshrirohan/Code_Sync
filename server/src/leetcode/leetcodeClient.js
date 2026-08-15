@@ -80,27 +80,35 @@ function sleep(ms) {
 // ============================================================================
 
 /**
- * fetchSolvedQuestions — Gets ALL unique questions the user has ever AC'd.
+ * fetchSolvedQuestions — Gets unique questions the user has AC'd.
  *
  * Strategy: paginate "submissionList" (server-side cap = 20 per page) with
- * increasing offset, collect every unique accepted titleSlug, stop when a page
- * has fewer than PAGE_SIZE results.
+ * increasing offset, collect every unique accepted titleSlug.
  *
- * Why not userProgressQuestionList?
- *   — It has a hardcoded default of 10 results and accepts NO pagination args
- *     (limit / skip / pageSize all rejected). It would miss the majority of
- *     problems for any serious user.
+ * INCREMENTAL MODE (knownSlugs provided):
+ *   Since submissionList returns newest-first, once we encounter 3 consecutive
+ *   pages where every accepted submission is already in knownSlugs, we stop.
+ *   This avoids paginating through hundreds of old submissions on every sync.
  *
- * Why not recentAcSubmissionList?
- *   — Hard-capped at 20 by the server regardless of the limit argument.
+ * FULL MODE (no knownSlugs):
+ *   Paginates until a page has fewer than PAGE_SIZE results (end of list).
  */
-async function fetchSolvedQuestions(cookie) {
-  console.log("Fetching your solved questions from LeetCode...");
+async function fetchSolvedQuestions(cookie, knownSlugs = new Set()) {
+  const isIncremental = knownSlugs.size > 0;
+  console.log(
+    isIncremental
+      ? `Fetching new solved questions (${knownSlugs.size} already synced)...`
+      : "Fetching your solved questions from LeetCode..."
+  );
 
   const seen      = new Set();  // titleSlugs already added (dedup)
   const questions = [];
   let   offset    = 0;
   const PAGE_SIZE = 20;         // LeetCode caps submissionList at 20 per page
+
+  // In incremental mode, stop after N consecutive pages with zero new problems
+  const MAX_STALE_PAGES = 3;
+  let   stalePageCount  = 0;
 
   while (true) {
     const query = `
@@ -141,9 +149,18 @@ async function fetchSolvedQuestions(cookie) {
     const submissions = data.data.submissionList.submissions;
     if (!submissions || submissions.length === 0) break;
 
+    let newOnThisPage = 0;
+
     for (const sub of submissions) {
       if (sub.statusDisplay === "Accepted" && !seen.has(sub.titleSlug)) {
         seen.add(sub.titleSlug);
+
+        // In incremental mode, skip problems we've already synced
+        if (isIncremental && knownSlugs.has(sub.titleSlug)) {
+          continue;
+        }
+
+        newOnThisPage++;
         questions.push({
           id:              null, // filled later from submissionDetails.question.questionId
           title:           null, // filled later from submissionDetails.question.title
@@ -153,12 +170,27 @@ async function fetchSolvedQuestions(cookie) {
       }
     }
 
+    // In incremental mode, track consecutive stale pages
+    if (isIncremental) {
+      if (newOnThisPage === 0) {
+        stalePageCount++;
+        if (stalePageCount >= MAX_STALE_PAGES) {
+          console.log(
+            `  ⚡ Early stop: ${MAX_STALE_PAGES} consecutive pages with no new problems.`
+          );
+          break;
+        }
+      } else {
+        stalePageCount = 0; // reset — new problems found on this page
+      }
+    }
+
     if (submissions.length < PAGE_SIZE) break; // last page reached
     offset += PAGE_SIZE;
     await sleep(300); // be polite to LeetCode's servers
   }
 
-  console.log(`Found ${questions.length} solved questions.`);
+  console.log(`Found ${questions.length} new solved questions.`);
   return questions;
 }
 
@@ -251,8 +283,8 @@ async function fetchLatestSubmissionId(cookie, titleSlug) {
  *       Use "questionId" instead (same value).
  */
 async function fetchSubmissionDetails(cookie, submissionId) {
-  const MAX_RETRIES = 5;
-  const RETRY_DELAY_MS = 1000;
+  const MAX_RETRIES = 6;
+  const BASE_DELAY_MS = 1000; // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -307,16 +339,20 @@ async function fetchSubmissionDetails(cookie, submissionId) {
       };
     } catch (error) {
       if (attempt === MAX_RETRIES) {
-        throw new Error(
-          `Failed to fetch details for submission ${submissionId} after ` +
-            `${MAX_RETRIES} retries. Last error: ${error.message}`
+        // Return null instead of throwing — let the orchestrator skip this one
+        // rather than killing the entire sync process
+        console.error(
+          `  ❌ Failed to fetch details for submission ${submissionId} after ` +
+            `${MAX_RETRIES} retries. Last error: ${error.message}. Skipping.`
         );
+        return null;
       }
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
       console.log(
         `  Retry ${attempt}/${MAX_RETRIES} for submission ${submissionId}` +
-          ` (${error.message})`
+          ` (${error.message}) — waiting ${delay}ms`
       );
-      await sleep(RETRY_DELAY_MS);
+      await sleep(delay);
     }
   }
 }
@@ -326,32 +362,44 @@ async function fetchSubmissionDetails(cookie, submissionId) {
 // ============================================================================
 
 /**
- * fetchAllSubmissions — Fetches ALL data for every solved question.
+ * fetchAllSubmissions — Fetches submission data for solved questions.
  *
- * Input:  cookie (string) — the user's LeetCode session cookie
+ * Input:  cookie     (string)     — the user's LeetCode session cookie
+ *         knownSlugs (Set|Array)  — optional set of already-synced titleSlugs
+ *                                   (used for incremental sync)
  * Output: array of complete submission objects:
  *         [{ id, title, titleSlug, lastSubmittedAt, lang, code }]
  *
  * How it works:
- *   Step 1: Get the list of all solved questions
- *   Step 2: For EACH question, fetch its latest submission ID and language
+ *   Step 1: Get the list of solved questions (stops early if knownSlugs provided)
+ *   Step 2: For EACH new question, fetch its latest submission ID and language
  *   Step 3: For EACH submission ID, fetch the actual code
  *
  * We add a small delay (300ms) between questions to avoid hammering
  * LeetCode's API and getting rate-limited.
  */
-async function fetchAllSubmissions(cookie) {
-  // Step 1: Get all solved questions (title, titleSlug, lastSubmittedAt)
-  const questions = await fetchSolvedQuestions(cookie);
+async function fetchAllSubmissions(cookie, knownSlugs = []) {
+  // Normalize to a Set for O(1) lookups
+  const knownSet = knownSlugs instanceof Set ? knownSlugs : new Set(knownSlugs);
+
+  // Step 1: Get solved questions (incremental if knownSlugs provided)
+  const questions = await fetchSolvedQuestions(cookie, knownSet);
+
+  if (questions.length === 0) {
+    console.log("\nNo new submissions to fetch.\n");
+    return [];
+  }
 
   const allSubmissions = [];
 
-  // Step 2 & 3: For each question, get the latest submission ID, then full details
+  // Step 2 & 3: For each new question, get the latest submission ID, then full details
+  let skippedCount = 0;
+
   for (let i = 0; i < questions.length; i++) {
     const question = questions[i];
 
     console.log(
-      `Fetching submission ${i + 1}/${questions.length}: ${question.title}...`
+      `Fetching submission ${i + 1}/${questions.length}: ${question.titleSlug}...`
     );
 
     // Step 2: Get the latest accepted submission ID + lang
@@ -361,12 +409,20 @@ async function fetchAllSubmissions(cookie) {
     );
 
     if (!submissionInfo) {
-      console.log(`  Skipping "${question.title}" — no accepted submission found`);
+      console.log(`  Skipping "${question.titleSlug}" — no accepted submission found`);
       continue;
     }
 
     // Step 3: Get code, questionId, title, and original timestamp
     const details = await fetchSubmissionDetails(cookie, submissionInfo.submissionId);
+
+    // If details is null, fetchSubmissionDetails already logged the error
+    if (!details) {
+      skippedCount++;
+      console.log(`  ⚠️  Skipping "${question.titleSlug}" — could not fetch submission details`);
+      await sleep(500); // Extra pause before next request after a failure
+      continue;
+    }
 
     allSubmissions.push({
       id:              details.questionId || question.titleSlug,
@@ -382,7 +438,9 @@ async function fetchAllSubmissions(cookie) {
   }
 
   console.log(
-    `\nSuccessfully fetched ${allSubmissions.length} submissions.\n`
+    `\nSuccessfully fetched ${allSubmissions.length} submissions` +
+    (skippedCount > 0 ? ` (${skippedCount} skipped due to errors)` : '') +
+    `.\n`
   );
   return allSubmissions;
 }

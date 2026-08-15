@@ -89,16 +89,23 @@ function sanitizeFolderName(name) {
  *   5. Push all commits to remote at once
  */
 async function execute(config) {
-  const { cookie, repoUrl, dryRun } = config;
+  const { cookie, repoUrl, dryRun, knownSlugs = [] } = config;
 
-  // ── Phase 1: Fetch all data from LeetCode ──────────────────────────────
+  // ── Phase 1: Fetch data from LeetCode (incremental if knownSlugs provided) ─
   // We do ALL fetching before ANY git operations. If this phase crashes,
   // the remote repo is completely untouched.
-  console.log("=== Phase 1: Fetching submissions from LeetCode ===\n");
-  const submissions = await fetchAllSubmissions(cookie);
+  const isIncremental = knownSlugs.length > 0;
+  console.log(
+    isIncremental
+      ? `=== Phase 1: Fetching NEW submissions from LeetCode (${knownSlugs.length} already synced) ===\n`
+      : "=== Phase 1: Fetching submissions from LeetCode ===\n"
+  );
+  const submissions = await fetchAllSubmissions(cookie, knownSlugs);
 
   if (submissions.length === 0) {
-    console.log("No submissions found. Nothing to sync!");
+    console.log("No new submissions found. Nothing to sync!");
+    // Even with no new submissions, output the existing slugs so they’re persisted
+    console.log(`\nCODESYNC_SYNCED_SLUGS:${JSON.stringify(knownSlugs)}`);
     return;
   }
 
@@ -178,6 +185,14 @@ async function execute(config) {
   console.log("\n=== Phase 5: Pushing to remote ===");
   gitClient.push();
 
+  // ── Output the full set of synced slugs so app.js can persist them ─────
+  // Merge previously-known slugs with newly-synced ones
+  const allSyncedSlugs = [...new Set([
+    ...knownSlugs,
+    ...submissions.map(s => s.titleSlug),
+  ])];
+  console.log(`\nCODESYNC_SYNCED_SLUGS:${JSON.stringify(allSyncedSlugs)}`);
+
   console.log("✅ CodeSync complete! All submissions have been synced.");
 }
 
@@ -188,10 +203,11 @@ export { execute, getFileExtension, sanitizeFolderName };
 // environment variables (never CLI args — those would be visible in `ps`).
 //
 // Required env vars injected by server.js:
-//   CODESYNC_COOKIE    — LeetCode session cookie (plaintext, already decrypted)
-//   CODESYNC_REPO_URL  — target GitHub repo HTTPS URL
-//   CODESYNC_TOKEN     — GitHub PAT / OAuth token
-//   CODESYNC_DRY_RUN   — '1' for dry run, '0' for real sync
+//   CODESYNC_COOKIE       — LeetCode session cookie (plaintext, already decrypted)
+//   CODESYNC_REPO_URL     — target GitHub repo HTTPS URL
+//   CODESYNC_TOKEN        — GitHub PAT / OAuth token
+//   CODESYNC_DRY_RUN      — '1' for dry run, '0' for real sync
+//   CODESYNC_KNOWN_SLUGS  — JSON array of already-synced titleSlugs (optional)
 
 const isMain = process.argv[1] &&
   (process.argv[1].endsWith('handler.js') || process.argv[1].endsWith('handler'));
@@ -202,12 +218,22 @@ if (isMain) {
   const token     = process.env.CODESYNC_TOKEN || null;
   const dryRun    = process.env.CODESYNC_DRY_RUN === '1';
 
+  // Parse known slugs from env (passed as JSON array string)
+  let knownSlugs = [];
+  try {
+    if (process.env.CODESYNC_KNOWN_SLUGS) {
+      knownSlugs = JSON.parse(process.env.CODESYNC_KNOWN_SLUGS);
+    }
+  } catch {
+    console.warn('Warning: Could not parse CODESYNC_KNOWN_SLUGS — running full sync.');
+  }
+
   if (!cookie || !repoUrl) {
     console.error('FATAL: CODESYNC_COOKIE and CODESYNC_REPO_URL must be set.');
     process.exit(1);
   }
 
-  execute({ cookie, repoUrl, githubToken: token, dryRun }).catch(err => {
+  execute({ cookie, repoUrl, githubToken: token, dryRun, knownSlugs }).catch(err => {
     console.error(`\nFATAL ERROR: ${err.message}`);
     process.exit(1);
   });
