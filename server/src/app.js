@@ -503,6 +503,9 @@ app.post('/api/sync/start', async (req, res) => {
 
     res.json({ jobId });
 
+    // Load previously-synced slugs for incremental sync
+    const knownSlugs = cfg.lastSyncedSlugs || [];
+
     // ── Run sync in a child process so it doesn't block the event loop ──
     // Pass config via env vars — never via CLI args (would be visible in `ps`)
     // Resolve the handler path relative to the project root
@@ -511,12 +514,16 @@ app.post('/api/sync/start', async (req, res) => {
       cwd: projectRoot,
       env: {
         ...process.env,
-        CODESYNC_COOKIE:   cfg.leetcodeCookie,
-        CODESYNC_REPO_URL: cfg.targetRepoUrl,
-        CODESYNC_TOKEN:    cfg.githubToken,
-        CODESYNC_DRY_RUN:  dryRun ? '1' : '0',
+        CODESYNC_COOKIE:      cfg.leetcodeCookie,
+        CODESYNC_REPO_URL:    cfg.targetRepoUrl,
+        CODESYNC_TOKEN:       cfg.githubToken,
+        CODESYNC_DRY_RUN:     dryRun ? '1' : '0',
+        CODESYNC_KNOWN_SLUGS: JSON.stringify(knownSlugs),
       },
     });
+
+    // Track synced slugs output from the child process
+    let updatedSlugs = null;
 
     function broadcast(event) {
       const job = jobs.get(jobId);
@@ -526,7 +533,25 @@ app.post('/api/sync/start', async (req, res) => {
       if (event.type === 'log') job.logs.push(event.message);
     }
 
-    child.stdout.on('data', d => broadcast({ type: 'log', message: d.toString() }));
+    function handleChildOutput(rawData) {
+      const text = rawData.toString();
+      // Check for the synced slugs marker in the output
+      const slugsPrefix = 'CODESYNC_SYNCED_SLUGS:';
+      for (const line of text.split('\n')) {
+        if (line.startsWith(slugsPrefix)) {
+          try {
+            updatedSlugs = JSON.parse(line.slice(slugsPrefix.length));
+          } catch {
+            logger.warn('Failed to parse CODESYNC_SYNCED_SLUGS output');
+          }
+          // Don't broadcast this internal marker line to the frontend
+          continue;
+        }
+      }
+      broadcast({ type: 'log', message: text });
+    }
+
+    child.stdout.on('data', handleChildOutput);
     child.stderr.on('data', d => broadcast({ type: 'log', message: d.toString() }));
 
     child.on('close', async (code) => {
@@ -544,6 +569,19 @@ app.post('/api/sync/start', async (req, res) => {
         status:       success ? 'success' : 'error',
         errorMessage: success ? null : `Process exited with code ${code}`,
       });
+
+      // Persist the updated set of synced slugs on success
+      if (success && updatedSlugs && Array.isArray(updatedSlugs)) {
+        try {
+          await saveConfig({
+            lastSyncedSlugs: updatedSlugs,
+            lastFullSyncAt:  new Date().toISOString(),
+          });
+          logger.info(`[Sync] Saved ${updatedSlugs.length} synced slugs to config`);
+        } catch (err) {
+          logger.error('[Sync] Failed to save synced slugs:', { err: err.message });
+        }
+      }
     });
 
   } catch (err) {
@@ -650,7 +688,13 @@ async function performIncrementalSync(cfg) {
   }
 
   gitClient.push();
-  return { synced: bySlug.size };
+
+  // Update the lastSyncedSlugs with the newly synced slugs
+  const existingSlugs = cfg.lastSyncedSlugs || [];
+  const newSlugsList = [...bySlug.keys()];
+  const allSlugs = [...new Set([...existingSlugs, ...newSlugsList])];
+
+  return { synced: bySlug.size, updatedSlugs: allSlugs };
 }
 
 async function runAutoSync() {
@@ -661,6 +705,9 @@ async function runAutoSync() {
     if (!cfg.leetcodeCookie || !cfg.githubToken || !cfg.targetRepoUrl) return;
     const result = await performIncrementalSync(cfg);
     cfg.lastAutoSyncAt = new Date().toISOString();
+    if (result.updatedSlugs) {
+      cfg.lastSyncedSlugs = result.updatedSlugs;
+    }
     await saveConfig(cfg);
     autoSyncState.lastResult = result;
     logger.info(`[Auto-sync] Done — ${result.synced} new submission(s) pushed`);
