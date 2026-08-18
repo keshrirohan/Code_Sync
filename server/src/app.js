@@ -598,7 +598,9 @@ function buildLCHeaders(cookie) {
 
 async function performIncrementalSync(cfg) {
   const { leetcodeCookie, leetcodeUsername, githubToken, targetRepoUrl, lastAutoSyncAt } = cfg;
-  const since = lastAutoSyncAt ? Math.floor(new Date(lastAutoSyncAt).getTime() / 1000) : 0;
+  // Compare using millisecond-epoch so it works whether lastAutoSyncAt is
+  // an ISO string, a Date, or missing (0 = sync everything).
+  const sinceMs = lastAutoSyncAt ? new Date(lastAutoSyncAt).getTime() : 0;
 
   const r = await fetch('https://leetcode.com/graphql', {
     method: 'POST',
@@ -610,7 +612,10 @@ async function performIncrementalSync(cfg) {
   });
   const data    = await r.json();
   const recent  = data.data?.recentAcSubmissionList ?? [];
-  const newSubs = recent.filter(s => parseInt(s.timestamp) > since);
+  // LeetCode's recentAcSubmissionList now returns timestamp as an ISO 8601
+  // string (e.g. "2026-08-01T08:26:00+00:00") instead of a Unix integer.
+  // Use new Date() to parse either format, then compare in milliseconds.
+  const newSubs = recent.filter(s => new Date(s.timestamp).getTime() > sinceMs);
   if (newSubs.length === 0) return { synced: 0 };
 
   const bySlug = new Map();
