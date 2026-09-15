@@ -68,6 +68,7 @@ app.use(express.json());
 // CORS — allow the React frontend and Chrome extension to reach the API
 const allowedOrigins = new Set([
   FRONTEND_URL,
+  'https://code-sync-3sld.onrender.com',   // production frontend (explicit)
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:3055',

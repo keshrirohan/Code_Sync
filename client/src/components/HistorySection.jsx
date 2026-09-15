@@ -1,31 +1,35 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
+import { apiUrl } from "../api";
 
 function formatDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
 function formatDuration(start, end) {
-  if (!start || !end) return '—';
+  if (!start || !end) return "—";
   const ms = new Date(end) - new Date(start);
-  if (ms < 1000) return '<1s';
+  if (ms < 1000) return "<1s";
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 export default function HistorySection() {
-  const [history, setHistory]   = useState([]);
-  const [loading, setLoading]   = useState(true);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null); // id being deleted
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/history');
+      const res = await fetch(apiUrl("/api/history"));
       const data = await res.json();
       setHistory(Array.isArray(data) ? data : []);
     } catch {
@@ -35,22 +39,24 @@ export default function HistorySection() {
     }
   }, []);
 
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   async function handleDelete(id) {
     setDeleting(id);
     try {
-      await fetch(`/api/history/${id}`, { method: 'DELETE' });
-      setHistory(prev => prev.filter(h => h.id !== id));
+      await fetch(apiUrl(`/api/history/${id}`), { method: "DELETE" });
+      setHistory((prev) => prev.filter((h) => h.id !== id));
     } finally {
       setDeleting(null);
     }
   }
 
   // Stats
-  const total    = history.length;
+  const total = history.length;
   const lastSync = history[0];
-  const successes = history.filter(h => h.status === 'success').length;
+  const successes = history.filter((h) => h.status === "success").length;
 
   return (
     <div className="page">
@@ -58,10 +64,16 @@ export default function HistorySection() {
         <div className="flex-between">
           <div>
             <h1 className="page-title">Sync History</h1>
-            <p className="page-subtitle">A record of every sync run you've performed.</p>
+            <p className="page-subtitle">
+              A record of every sync run you've performed.
+            </p>
           </div>
-          <button className="btn btn-secondary" onClick={fetchHistory} disabled={loading}>
-            {loading ? <span className="spinner" /> : '↻'} Refresh
+          <button
+            className="btn btn-secondary"
+            onClick={fetchHistory}
+            disabled={loading}
+          >
+            {loading ? <span className="spinner" /> : "↻"} Refresh
           </button>
         </div>
       </div>
@@ -73,14 +85,17 @@ export default function HistorySection() {
           <div className="stat-label">Total Syncs</div>
         </div>
         <div className="stat-card">
-          <div className="stat-number" style={{ color: 'var(--emerald-light)' }}>
+          <div
+            className="stat-number"
+            style={{ color: "var(--emerald-light)" }}
+          >
             {successes}
           </div>
           <div className="stat-label">Successful</div>
         </div>
         <div className="stat-card">
           <div className="stat-number" style={{ fontSize: 16, paddingTop: 6 }}>
-            {lastSync ? formatDate(lastSync.completedAt).split(',')[0] : '—'}
+            {lastSync ? formatDate(lastSync.completedAt).split(",")[0] : "—"}
           </div>
           <div className="stat-label">Last Sync</div>
         </div>
@@ -88,8 +103,14 @@ export default function HistorySection() {
 
       {/* Table */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-3)' }}>
-          <div className="loading-spinner" style={{ margin: '0 auto 12px' }} />
+        <div
+          style={{
+            textAlign: "center",
+            padding: "60px",
+            color: "var(--text-3)",
+          }}
+        >
+          <div className="loading-spinner" style={{ margin: "0 auto 12px" }} />
           <p>Loading history...</p>
         </div>
       ) : history.length === 0 ? (
@@ -114,10 +135,10 @@ export default function HistorySection() {
               </tr>
             </thead>
             <tbody>
-              {history.map(entry => (
+              {history.map((entry) => (
                 <tr key={entry.id}>
                   <td>
-                    <div style={{ fontWeight: 500, color: 'var(--text)' }}>
+                    <div style={{ fontWeight: 500, color: "var(--text)" }}>
                       {formatDate(entry.completedAt || entry.startedAt)}
                     </div>
                   </td>
@@ -126,30 +147,32 @@ export default function HistorySection() {
                       title={entry.repoUrl}
                       style={{
                         maxWidth: 180,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
                         fontFamily: "'JetBrains Mono', monospace",
                         fontSize: 12,
-                        color: 'var(--violet-light)',
+                        color: "var(--violet-light)",
                       }}
                     >
-                      {entry.repoName || entry.repoUrl || '—'}
+                      {entry.repoName || entry.repoUrl || "—"}
                     </div>
                   </td>
                   <td>
                     <span className={`history-status ${entry.status}`}>
-                      {entry.status === 'success' ? '✓ Success' : '✕ Failed'}
+                      {entry.status === "success" ? "✓ Success" : "✕ Failed"}
                     </span>
                   </td>
                   <td>
                     {entry.dryRun ? (
                       <span className="history-status dry">🔍 Dry Run</span>
                     ) : (
-                      <span style={{ color: 'var(--text-3)', fontSize: 12 }}>Full Sync</span>
+                      <span style={{ color: "var(--text-3)", fontSize: 12 }}>
+                        Full Sync
+                      </span>
                     )}
                   </td>
-                  <td style={{ color: 'var(--text-3)', fontSize: 12 }}>
+                  <td style={{ color: "var(--text-3)", fontSize: 12 }}>
                     {formatDuration(entry.startedAt, entry.completedAt)}
                   </td>
                   <td>
@@ -159,7 +182,11 @@ export default function HistorySection() {
                       disabled={deleting === entry.id}
                       title="Delete this entry"
                     >
-                      {deleting === entry.id ? <span className="spinner" /> : '🗑'}
+                      {deleting === entry.id ? (
+                        <span className="spinner" />
+                      ) : (
+                        "🗑"
+                      )}
                     </button>
                   </td>
                 </tr>

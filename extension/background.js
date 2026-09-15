@@ -2,7 +2,7 @@
 // background.js — MV3 Service Worker for CodeSync
 // ============================================================================
 
-const DEFAULT_SERVER = 'http://localhost:3055';
+const DEFAULT_SERVER = 'https://codesync-api-5p2c.onrender.com';
 const FETCH_TIMEOUT_MS = 8000;
 
 async function getServerUrl() {
@@ -77,7 +77,7 @@ async function captureLeetCodeCookie() {
     return {
       success: false,
       error: isNetworkError
-        ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+        ? 'Cannot reach the CodeSync backend. Check your internet connection or try again later.'
         : err.message,
     };
   }
@@ -100,7 +100,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({
             success: false,
             error: isTimeout || healthErr.message.includes('Failed to fetch')
-              ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+              ? 'Cannot reach the CodeSync backend. Check your internet connection.'
               : `Backend error: ${healthErr.message}`,
             backendOffline: true,
           });
@@ -167,7 +167,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         success: false,
         error: isNetworkError
-          ? 'CodeSync backend is not running. Start it with: cd server && npm run dev'
+          ? 'Cannot reach the CodeSync backend. Check your internet connection.'
           : err.message,
         backendOffline: isNetworkError,
       });

@@ -6,23 +6,23 @@
 // ============================================================================
 
 const REQUIRED = [
-  'MONGODB_URI',
-  'ENCRYPTION_SECRET', // 32-char hex string for AES-256
+  "MONGODB_URI",
+  "ENCRYPTION_SECRET", // 32-char hex string for AES-256
 ];
 
 const OPTIONAL_WITH_DEFAULTS = {
-  PORT:        '3055',
-  NODE_ENV:    'development',
-  FRONTEND_URL: 'http://localhost:5173',
+  PORT: "3055",
+  NODE_ENV: "development",
+  FRONTEND_URL: "http://localhost:5173",
 };
 
 export function validateEnv() {
-  const missing = REQUIRED.filter(key => !process.env[key]);
+  const missing = REQUIRED.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {
-    console.error('\n❌  Missing required environment variables:');
-    missing.forEach(k => console.error(`   • ${k}`));
-    console.error('\n   Copy .env.example → .env and fill in the values.\n');
+    console.error("\n❌  Missing required environment variables:");
+    missing.forEach((k) => console.error(`   • ${k}`));
+    console.error("\n   Copy .env.example → .env and fill in the values.\n");
     process.exit(1);
   }
 

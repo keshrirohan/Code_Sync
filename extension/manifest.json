@@ -6,7 +6,7 @@
   "permissions": ["cookies", "storage", "alarms", "tabs"],
   "host_permissions": [
     "https://leetcode.com/*",
-    "http://localhost:3055/*"
+    "https://codesync-api-5p2c.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"

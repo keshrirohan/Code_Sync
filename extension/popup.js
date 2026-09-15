@@ -3,7 +3,7 @@
 (async function () {
   "use strict";
 
-  const DEFAULT_BASE_URL = "http://localhost:3055";
+  const DEFAULT_BASE_URL = "https://codesync-api-5p2c.onrender.com";
 
   // DOM elements
   const lcDot          = document.getElementById("lc-dot");
