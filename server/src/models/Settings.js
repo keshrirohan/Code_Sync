@@ -39,15 +39,12 @@ const settingsSchema = new mongoose.Schema(
     autoSyncIntervalMinutes: { type: Number,  default: 10 },
     lastAutoSyncAt:          { type: Date,    default: null },
 
-    // ── Incremental sync — remembers what's already been pushed ──────────
-    // Array of titleSlugs that have been successfully synced to GitHub.
-    // Used by fetchSolvedQuestions to stop pagination early once it hits
-    // only already-synced problems, dramatically reducing API calls.
-    lastSyncedSlugs:  { type: [String], default: [] },
-    lastFullSyncAt:   { type: Date,     default: null },
+    // ── Incremental sync state ─────────────────────────────────────────────
+    lastSyncedSlugs: { type: [String], default: [] },
+    lastFullSyncAt:  { type: Date,     default: null },
   },
   {
-    timestamps: true, // adds createdAt / updatedAt
+    timestamps: true,
     collection: 'settings',
   }
 );
@@ -68,16 +65,45 @@ settingsSchema.statics.loadGlobal = async function () {
 };
 
 /**
- * saveGlobal — Merges `data` into the singleton document (upsert).
- * Returns the updated plain object.
+ * saveGlobal — Merges `data` into the singleton document.
+ *
+ * @param {object} data        — fields to $set (present keys only)
+ * @param {string[]} clearFields — field names to $unset (explicitly null them in DB)
+ *
+ * WHY clearFields exists:
+ *   JavaScript `delete obj.key` removes the key from the object — it does NOT
+ *   appear in the `$set` payload, so MongoDB ignores it and the old value
+ *   persists. To actually remove a value from the document we must use $unset.
+ *   This is the root cause of "Disconnect doesn't work" in production.
  */
-settingsSchema.statics.saveGlobal = async function (data) {
-  // Never allow overwriting the singleton key
+settingsSchema.statics.saveGlobal = async function (data, clearFields = []) {
+  // Never allow overwriting the singleton key or internal Mongoose fields
   const { key: _key, _id, __v, createdAt, updatedAt, ...fields } = data;
+
+  // Build the update operation
+  const update = {};
+
+  // $set any fields that are present in the payload
+  if (Object.keys(fields).length > 0) {
+    update.$set = fields;
+  }
+
+  // $unset any fields that should be explicitly cleared in MongoDB
+  if (clearFields.length > 0) {
+    update.$unset = {};
+    for (const f of clearFields) {
+      update.$unset[f] = '';   // MongoDB $unset value is irrelevant — '' is conventional
+    }
+  }
+
+  // If nothing to do, return current doc
+  if (!update.$set && !update.$unset) {
+    return this.findOne({ key: 'global' }).lean();
+  }
 
   const doc = await this.findOneAndUpdate(
     { key: 'global' },
-    { $set: fields },
+    update,
     { upsert: true, new: true, lean: true }
   );
   return doc;

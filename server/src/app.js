@@ -253,10 +253,11 @@ app.post('/api/auth/leetcode-from-extension', handleLeetcodeAuth);
 
 app.delete('/api/auth/leetcode', async (req, res) => {
   try {
-    const cfg = await loadConfig();
-    delete cfg.leetcodeCookie;
-    delete cfg.leetcodeUsername;
-    await saveConfig(cfg);
+    // Use clearFields so $unset actually removes the values from MongoDB.
+    // Calling `delete cfg.key` and then saveConfig only removes the key from
+    // the JS object — it does NOT update MongoDB, leaving stale credentials.
+    await saveConfig({}, ['leetcodeCookie', 'leetcodeUsername']);
+    logger.info('LeetCode account disconnected');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -294,11 +295,9 @@ app.post('/api/auth/github', async (req, res) => {
 
 app.delete('/api/auth/github', async (req, res) => {
   try {
-    const cfg = await loadConfig();
-    delete cfg.githubToken;
-    delete cfg.githubUsername;
-    delete cfg.githubAvatar;
-    await saveConfig(cfg);
+    // Use clearFields so $unset actually removes the values from MongoDB.
+    await saveConfig({}, ['githubToken', 'githubUsername', 'githubAvatar']);
+    logger.info('GitHub account disconnected');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -509,10 +508,17 @@ app.post('/api/sync/start', async (req, res) => {
 
     // ── Run sync in a child process so it doesn't block the event loop ──
     // Pass config via env vars — never via CLI args (would be visible in `ps`)
-    // Resolve the handler path relative to the project root
-    const projectRoot = path.join(__dirname, '../..');
-    const child = spawn(process.execPath, ['server/src/sync/handler.js'], {
-      cwd: projectRoot,
+    //
+    // Use an absolute path to handler.js derived from __dirname (app.js lives
+    // at server/src/app.js, so handler.js is at server/src/sync/handler.js).
+    // A relative path from a computed projectRoot is fragile on Render because
+    // __dirname depth changes depending on the "Root Directory" dashboard setting.
+    //
+    // Set cwd to process.cwd() which is the reliable, writable app root on
+    // every platform (Render sets this to the deployed service root).
+    const handlerPath = path.join(__dirname, 'sync', 'handler.js');
+    const child = spawn(process.execPath, [handlerPath], {
+      cwd: process.cwd(),
       env: {
         ...process.env,
         CODESYNC_COOKIE:      cfg.leetcodeCookie,
@@ -595,9 +601,13 @@ app.get('/api/sync/:jobId/stream', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job not found' });
 
-  res.setHeader('Content-Type',  'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection',    'keep-alive');
+  res.setHeader('Content-Type',      'text/event-stream');
+  res.setHeader('Cache-Control',     'no-cache');
+  res.setHeader('Connection',        'keep-alive');
+  // Disable nginx buffering on Render — without this header nginx silently
+  // swallows SSE events, the browser EventSource gets nothing, and onerror
+  // fires immediately making the sync appear to fail in the UI.
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
   // Replay buffered logs for late-joining clients
@@ -611,7 +621,17 @@ app.get('/api/sync/:jobId/stream', (req, res) => {
   }
 
   job.sseClients.push(res);
+
+  // Send a comment-line heartbeat every 20 seconds.
+  // Render's load balancer has a 30-second idle timeout — without a heartbeat
+  // the connection is killed mid-sync with no data. SSE comment lines
+  // (lines starting with ':') are ignored by EventSource on the client.
+  const heartbeatTimer = setInterval(() => {
+    try { res.write(': heartbeat\n\n'); } catch { /* client disconnected */ }
+  }, 20_000);
+
   req.on('close', () => {
+    clearInterval(heartbeatTimer);
     const j = jobs.get(req.params.jobId);
     if (j) j.sseClients = j.sseClients.filter(c => c !== res);
   });

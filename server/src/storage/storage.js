@@ -75,13 +75,15 @@ export async function loadConfig() {
  * saveConfig — Merges `data` into the global settings document.
  * Sensitive fields are encrypted before writing.
  *
- * Input:  data (object) — partial or full config (plaintext values)
+ * Input:  data        (object)   — partial or full config (plaintext values)
+ *         clearFields (string[]) — field names to explicitly null in MongoDB
+ *                                  via $unset (use this for disconnect flows)
  * Output: void
  */
-export async function saveConfig(data) {
+export async function saveConfig(data, clearFields = []) {
   try {
     const encrypted = encryptFields(data);
-    await Settings.saveGlobal(encrypted);
+    await Settings.saveGlobal(encrypted, clearFields);
   } catch (err) {
     logger.error('saveConfig failed:', { err: err.message });
     throw err;

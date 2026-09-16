@@ -6,15 +6,21 @@
   const DEFAULT_BASE_URL = "https://codesync-api-5p2c.onrender.com"; // backend API
   const DASHBOARD_URL    = "https://code-sync-3sld.onrender.com";    // frontend dashboard
 
-  // DOM elements
+  // ── DOM refs ────────────────────────────────────────────────────────────────
+
   const lcDot          = document.getElementById("lc-dot");
   const lcVal          = document.getElementById("lc-val");
   const dashDot        = document.getElementById("dash-dot");
   const dashVal        = document.getElementById("dash-val");
   const lastSyncBadge  = document.getElementById("last-sync-badge");
+
   const autosyncToggle = document.getElementById("autosync-toggle");
   const asSub          = document.getElementById("as-sub");
   const asPulse        = document.getElementById("as-pulse");
+  // interval controls — wired to persist and send interval to background
+  const intervalRow    = document.getElementById("interval-row");
+  const intervalSelect = document.getElementById("interval-select");
+
   const syncNowBtn     = document.getElementById("sync-now-btn");
   const syncNowIcon    = document.getElementById("sync-now-icon");
   const syncNowLabel   = document.getElementById("sync-now-label");
@@ -27,9 +33,13 @@
   const toastIcon      = document.getElementById("toast-icon");
   const toastMsg       = document.getElementById("toast-msg");
 
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
   async function getBaseUrl() {
     return new Promise((resolve) => {
-      chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL }, (r) => resolve((r.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '')));
+      chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL }, (r) =>
+        resolve((r.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, ''))
+      );
     });
   }
 
@@ -41,25 +51,52 @@
   }
 
   function setDot(el, valEl, status, text) {
-    if (status === 'ok') {
-      el.className = "status-dot dot-ok";
-      valEl.className = "status-val ok";
-    } else if (status === 'err') {
-      el.className = "status-dot dot-err";
-      valEl.className = "status-val err";
-    } else {
-      el.className = "status-dot dot-loading";
-      valEl.className = "status-val";
-    }
+    el.className    = `status-dot dot-${status === 'ok' ? 'ok' : status === 'err' ? 'err' : 'loading'}`;
+    valEl.className = `status-val${status === 'ok' ? ' ok' : status === 'err' ? ' err' : ''}`;
     valEl.textContent = text;
   }
 
-  const baseUrl = await getBaseUrl();
+  // ── Auto-sync UI helpers ─────────────────────────────────────────────────────
+
+  /**
+   * renderAutoSyncUI — updates all auto-sync visual elements atomically.
+   * @param {boolean} enabled
+   * @param {number}  intervalMinutes
+   */
+  function renderAutoSyncUI(enabled, intervalMinutes) {
+    if (autosyncToggle) autosyncToggle.checked = enabled;
+
+    // Show / hide the interval selector row based on toggle state
+    if (intervalRow) intervalRow.style.display = enabled ? 'flex' : 'none';
+
+    // Set interval selector to the stored value (clamp to available options)
+    if (intervalSelect) {
+      const strVal = String(intervalMinutes);
+      // Only set if the option actually exists — avoids blank selection
+      if ([...intervalSelect.options].some(o => o.value === strVal)) {
+        intervalSelect.value = strVal;
+      }
+    }
+
+    // Animated pulse dot in the title
+    if (asPulse) asPulse.className = enabled ? 'pulse-dot' : '';
+
+    // Sub-label text
+    if (asSub) {
+      asSub.className   = enabled ? 'autosync-sub active' : 'autosync-sub';
+      asSub.textContent = enabled
+        ? `ON · auto-push on Accept + polls every ${intervalMinutes} min`
+        : 'Push to GitHub the moment LeetCode says Accepted';
+    }
+  }
+
+  // ── Navigation buttons ───────────────────────────────────────────────────────
 
   if (openBtn) openBtn.addEventListener("click", () => chrome.tabs.create({ url: DASHBOARD_URL }));
   if (lcBtn)   lcBtn.addEventListener("click",   () => chrome.tabs.create({ url: "https://leetcode.com" }));
 
-  // Check Connection Status
+  // ── Check Connection Status ──────────────────────────────────────────────────
+
   async function checkStatus() {
     try {
       const response = await chrome.runtime.sendMessage({ type: "CHECK_AUTH" });
@@ -76,13 +113,11 @@
           if (cookieSection) cookieSection.style.display = "block";
         }
       } else if (response?.backendOffline) {
-        // Backend is not running — show specific message
         setDot(dashDot, dashVal, 'err', 'Backend offline');
         setDot(lcDot,   lcVal,   'err', 'Backend offline');
         if (syncNowBtn) syncNowBtn.disabled = true;
         if (cookieSection) cookieSection.style.display = "none";
       } else {
-        // Backend responded but with an error (e.g. MongoDB down)
         setDot(dashDot, dashVal, 'err', response?.error || 'Error');
         setDot(lcDot,   lcVal,   'err', 'Unknown');
         if (syncNowBtn) syncNowBtn.disabled = true;
@@ -95,27 +130,62 @@
     }
   }
 
-  // Load Auto-sync setting
-  try {
-    const autoSyncResp = await chrome.runtime.sendMessage({ type: "GET_AUTO_SYNC" });
-    if (autosyncToggle) {
-      autosyncToggle.checked = autoSyncResp?.autoSync !== false;
-      if (asSub) asSub.className = autosyncToggle.checked ? "autosync-sub active" : "autosync-sub";
-      if (asPulse) asPulse.className = autosyncToggle.checked ? "pulse-dot" : "";
-    }
-  } catch {}
+  // ── Load & wire Auto-sync controls ──────────────────────────────────────────
 
+  // Load persisted values from local storage then render the UI
+  try {
+    const stored = await chrome.storage.local.get(['autoSyncEnabled', 'autoSyncIntervalMinutes']);
+    const enabled  = stored.autoSyncEnabled !== false;        // default true
+    const interval = stored.autoSyncIntervalMinutes  || 10;   // default 10 min
+    renderAutoSyncUI(enabled, interval);
+  } catch {
+    renderAutoSyncUI(false, 10);
+  }
+
+  // Toggle: when the user flips the switch, persist + update the alarm
   if (autosyncToggle) {
     autosyncToggle.addEventListener("change", async () => {
-      const enabled = autosyncToggle.checked;
-      await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled });
-      if (asSub) asSub.className = enabled ? "autosync-sub active" : "autosync-sub";
-      if (asPulse) asPulse.className = enabled ? "pulse-dot" : "";
+      const enabled  = autosyncToggle.checked;
+      const interval = intervalSelect ? parseInt(intervalSelect.value, 10) : 10;
+
+      // Persist immediately so the service worker picks it up on next wake
+      await chrome.storage.local.set({
+        autoSyncEnabled:          enabled,
+        autoSyncIntervalMinutes:  interval,
+      });
+
+      // Tell background.js to recreate (or clear) the alarm
+      await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled, intervalMinutes: interval });
+
+      renderAutoSyncUI(enabled, interval);
       showToast(enabled ? "Auto-sync enabled" : "Auto-sync disabled", true);
     });
   }
 
-  // Connect LeetCode Button (Auto-capture)
+  // Interval selector: when the user picks a new interval, persist + update alarm
+  // This only matters when the toggle is ON — the row is hidden when toggle is OFF
+  if (intervalSelect) {
+    intervalSelect.addEventListener("change", async () => {
+      const interval = parseInt(intervalSelect.value, 10);
+      const enabled  = autosyncToggle ? autosyncToggle.checked : true;
+
+      if (!enabled) return; // selector is hidden, shouldn't be reachable, but guard anyway
+
+      // Persist the new interval
+      await chrome.storage.local.set({ autoSyncIntervalMinutes: interval });
+
+      // Tell background.js to re-schedule the alarm with the new period
+      await chrome.runtime.sendMessage({ type: "SET_AUTO_SYNC", enabled: true, intervalMinutes: interval });
+
+      // Update sub-label to reflect new interval
+      if (asSub) asSub.textContent = `ON · auto-push on Accept + polls every ${interval} min`;
+
+      showToast(`Interval set to ${interval} min`, true);
+    });
+  }
+
+  // ── Connect LeetCode (auto-capture via cookies) ──────────────────────────────
+
   if (sendBtn) {
     sendBtn.addEventListener("click", async () => {
       sendBtn.disabled = true;
@@ -137,11 +207,12 @@
     });
   }
 
-  // Sync Now Button
+  // ── Sync Now ─────────────────────────────────────────────────────────────────
+
   if (syncNowBtn) {
     syncNowBtn.addEventListener("click", async () => {
       syncNowBtn.disabled = true;
-      if (syncNowIcon) syncNowIcon.className = "spinner";
+      if (syncNowIcon)  syncNowIcon.className   = "spinner";
       if (syncNowLabel) syncNowLabel.textContent = "Syncing...";
       try {
         const res = await chrome.runtime.sendMessage({ type: "TRIGGER_SYNC" });
@@ -155,7 +226,7 @@
       } finally {
         syncNowBtn.disabled = false;
         if (syncNowIcon) {
-          syncNowIcon.className = "";
+          syncNowIcon.className   = "";
           syncNowIcon.textContent = "🔄";
         }
         if (syncNowLabel) syncNowLabel.textContent = "Sync Now (only new problems)";
@@ -163,14 +234,18 @@
     });
   }
 
-  // Load last sync
+  // ── Last sync badge ──────────────────────────────────────────────────────────
+
   try {
     const lastSync = await chrome.runtime.sendMessage({ type: "GET_LAST_SYNC" });
-    if (lastSync?.problemName && lastSyncBadge) {
+    if (lastSync?.repoName && lastSyncBadge) {
       lastSyncBadge.style.display = "inline-block";
-      lastSyncBadge.textContent = `Last: ${lastSync.problemName}`;
+      lastSyncBadge.textContent   = `🔄 ${lastSync.repoName}`;
     }
   } catch {}
 
+  // ── Initial status check ─────────────────────────────────────────────────────
+
   await checkStatus();
+
 })();

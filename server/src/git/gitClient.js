@@ -1,65 +1,73 @@
 // ============================================================================
 // gitClient.js — Handles all Git operations via shell commands.
 //
-// Production change vs. local version:
-//   init() now accepts an optional `githubToken` parameter. When provided,
-//   it embeds the token into the HTTPS clone URL so git can authenticate
-//   without an interactive prompt — required on Render (no stored credentials).
-//
+// Production change:
+//   init() accepts an optional `githubToken` so it can embed the token into
+//   the HTTPS clone URL — required on Render which has no stored git creds.
 //   URL format:  https://<token>@github.com/owner/repo.git
 //
-// The key trick: we use --date and GIT_COMMITTER_DATE to set BOTH the
-// author date and committer date to the original LeetCode submission time.
-// This makes GitHub's contribution graph show green squares on the correct days.
+// Commit backdating:
+//   We set both --date AND GIT_COMMITTER_DATE so both author and committer
+//   dates match the original LeetCode submission time. GitHub's contribution
+//   graph uses committer date, so both must be set.
+//
+// REPO_BASE_DIR resolution:
+//   We use process.cwd() as the base for the temp clone directory.
+//   On Render (Root Directory = server), process.cwd() = /app which is the
+//   server root — a writable ephemeral directory. Using __dirname-based
+//   relative paths is fragile because __dirname depth changes depending on
+//   how far the root is set in Render's dashboard.
 // ============================================================================
 
 import { execSync } from 'child_process';
 import fs   from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// Always clone into a fixed absolute path so it works regardless of cwd.
-// On Render, process.cwd() is the project root — we place the temp clone
-// alongside the server source so it's on the same filesystem/volume.
-const REPO_DIR      = 'codesync_repo';
-const REPO_BASE_DIR = path.resolve(__dirname, '../../..'); // project root
+// ── Clone directory ───────────────────────────────────────────────────────────
+//
+// Place the temp clone inside process.cwd() which is always the server root
+// on Render (/app) and the project root locally. This is always writable.
+//
+// We do NOT derive this from __dirname because __dirname depth is different
+// depending on where the process was started from:
+//   - local Windows:  e:\codesync\server\src\git  → ../../../  = e:\codesync
+//   - Render (Root Dir = server): /app/src/git     → ../../../  = /   ← WRONG
+//
+const REPO_DIR = 'codesync_repo';
 
 /**
  * getRepoPath — Returns the absolute path to the cloned repo directory.
+ * Always inside process.cwd() so it's writable on every platform.
  */
 export function getRepoPath() {
-  return path.join(REPO_BASE_DIR, REPO_DIR);
+  return path.join(process.cwd(), REPO_DIR);
 }
 
 /**
  * buildAuthUrl — Injects a GitHub token into an HTTPS clone URL.
  *
- * Input:  repoUrl (string)    — e.g. "https://github.com/user/repo.git"
- *         token   (string|null) — GitHub PAT or OAuth token
- * Output: authenticated URL, or original URL if no token / SSH URL
- *
- * Only modifies https:// URLs. SSH URLs (git@github.com) are left unchanged
+ * Only modifies https:// URLs. SSH URLs (git@github.com) are unchanged
  * because they use key-based auth and don't support token embedding.
+ *
+ * Also strips any existing credentials to avoid double-embedding.
  */
 function buildAuthUrl(repoUrl, token) {
   if (!token || !repoUrl.startsWith('https://')) return repoUrl;
-  // Strip any existing credentials to avoid double-embedding
-  return repoUrl.replace('https://', `https://${token}@`);
+  // Remove any existing user:pass@ to avoid double-embedding
+  const stripped = repoUrl.replace(/^https:\/\/[^@]+@/, 'https://');
+  return stripped.replace('https://', `https://${token}@`);
 }
 
 /**
  * init — Clones the target Git repository into a local folder.
  *
- * Input:  repoUrl (string)     — the Git remote URL (HTTPS or SSH)
- *         token   (string|null) — GitHub token for HTTPS auth (production)
- * Output: none (creates the folder on disk)
+ * @param {string}      repoUrl — HTTPS or SSH remote URL
+ * @param {string|null} token   — GitHub PAT or OAuth token (production only)
  */
 export function init(repoUrl, token = null) {
-  const repoPath  = getRepoPath();
-  const cloneUrl  = buildAuthUrl(repoUrl, token);
+  const repoPath = getRepoPath();
+  const cloneUrl = buildAuthUrl(repoUrl, token);
+  const baseDir  = process.cwd();
 
   // Clean up any leftover folder from a previous run
   if (fs.existsSync(repoPath)) {
@@ -67,21 +75,20 @@ export function init(repoUrl, token = null) {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
 
-  // Ensure the parent directory exists
-  fs.mkdirSync(REPO_BASE_DIR, { recursive: true });
-
-  console.log(`Cloning into ${repoPath}...`);
-  // Clone into the absolute path — don't log the URL (it contains the token)
+  console.log(`Cloning repository into ${REPO_DIR} (cwd: ${baseDir})...`);
+  // Clone into the absolute repoPath — don't log cloneUrl (it contains the token)
   execSync(`git clone "${cloneUrl}" "${repoPath}"`, {
     stdio: 'inherit',
-    cwd:   REPO_BASE_DIR,
+    cwd:   baseDir,
   });
 
-  // Configure a local git identity so commits work on Render (no global git config)
+  // Configure a local git identity so commits work on machines with no
+  // global git config (Render ephemeral containers have none by default).
   execSync('git config user.email "codesync@local.dev"', { cwd: repoPath, stdio: 'pipe' });
   execSync('git config user.name "CodeSync"',            { cwd: repoPath, stdio: 'pipe' });
 
-  // Update the remote URL to include the token so `git push` authenticates.
+  // Update the remote URL so `git push` is also authenticated via the token.
+  // This must happen AFTER clone because the remote is created during clone.
   if (token && repoUrl.startsWith('https://')) {
     execSync(`git remote set-url origin "${cloneUrl}"`, { cwd: repoPath, stdio: 'pipe' });
   }
@@ -90,30 +97,30 @@ export function init(repoUrl, token = null) {
 }
 
 /**
- * commit — Writes a code file and creates a git commit with a custom date.
+ * commit — Writes a solution file and creates a backdated git commit.
  *
- * Inputs:
- *   folderName (string) — subfolder inside the repo, e.g. "1 Two Sum"
- *   fileName   (string) — the file to create, e.g. "1-two-sum.py"
- *   code       (string) — the actual source code to write
- *   message    (string) — the commit message
- *   timestamp  (string) — ISO 8601 date string of the original submission
+ * @param {string} folderName — subfolder in repo, e.g. "1 Two Sum"
+ * @param {string} fileName   — filename, e.g. "1-two-sum.py"
+ * @param {string} code       — source code content
+ * @param {string} message    — commit message
+ * @param {string} timestamp  — ISO 8601 string of original LeetCode submission
  */
 export function commit(folderName, fileName, code, message, timestamp) {
-  const repoPath = getRepoPath();
-
+  const repoPath   = getRepoPath();
   const folderPath = path.join(repoPath, folderName);
+
   if (!fs.existsSync(folderPath)) {
     fs.mkdirSync(folderPath, { recursive: true });
   }
 
-  const filePath = path.join(folderPath, fileName);
-  fs.writeFileSync(filePath, code, 'utf-8');
+  fs.writeFileSync(path.join(folderPath, fileName), code, 'utf-8');
 
   const dateString = new Date(timestamp).toISOString();
 
   execSync('git add .', { cwd: repoPath, stdio: 'pipe' });
 
+  // --date sets the author date; GIT_COMMITTER_DATE sets the committer date.
+  // GitHub contribution graph uses committer date — both must match.
   execSync(`git commit --allow-empty --date="${dateString}" -m "${message}"`, {
     cwd:   repoPath,
     stdio: 'pipe',
@@ -130,8 +137,8 @@ export function commit(folderName, fileName, code, message, timestamp) {
 export function commitReadme(content) {
   const repoPath   = getRepoPath();
   const readmePath = path.join(repoPath, 'README.md');
-  fs.writeFileSync(readmePath, content, 'utf-8');
 
+  fs.writeFileSync(readmePath, content, 'utf-8');
   execSync('git add README.md', { cwd: repoPath, stdio: 'pipe' });
 
   try {
@@ -140,15 +147,19 @@ export function commitReadme(content) {
       stdio: 'pipe',
     });
   } catch (err) {
+    // git exits 1 when there is nothing new to commit — that is not an error
     if (!err.message.includes('nothing to commit')) throw err;
   }
 }
 
 /**
- * push — Pushes all local commits to the remote repository, then cleans up.
+ * push — Pushes all local commits to remote and deletes the local clone.
  *
- * The remote URL already has the token embedded (set during init),
- * so no extra credentials are needed here.
+ * The remote URL already has the token embedded (set by init via
+ * `git remote set-url`), so no extra auth is needed here.
+ *
+ * We delete the clone after pushing because Render's filesystem is
+ * ephemeral — there is no point keeping it, and it frees disk space.
  */
 export function push() {
   const repoPath = getRepoPath();

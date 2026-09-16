@@ -222,8 +222,9 @@ describe('generateReadme()', () => {
   test('works without a githubRepoUrl (falls back to #)', () => {
     const md = generateReadme(SAMPLE_ENTRIES, '');
     expect(md).not.toContain('undefined');
-    // fallback href is '#'
-    expect(md).toContain('href="#"');
+    // When repoUrl is empty, badge links and solution links fall back to (#)
+    // The markdown format is [![...](badge)](#) not href="#"
+    expect(md).toContain('(#)');
   });
 
   test('URL-encodes folder names with spaces in solution links', () => {
