@@ -16,14 +16,22 @@
 import { execSync } from 'child_process';
 import fs   from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const REPO_DIR = 'codesync_repo';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+
+// Always clone into a fixed absolute path so it works regardless of cwd.
+// On Render, process.cwd() is the project root — we place the temp clone
+// alongside the server source so it's on the same filesystem/volume.
+const REPO_DIR      = 'codesync_repo';
+const REPO_BASE_DIR = path.resolve(__dirname, '../../..'); // project root
 
 /**
  * getRepoPath — Returns the absolute path to the cloned repo directory.
  */
 export function getRepoPath() {
-  return path.resolve(process.cwd(), REPO_DIR);
+  return path.join(REPO_BASE_DIR, REPO_DIR);
 }
 
 /**
@@ -59,22 +67,23 @@ export function init(repoUrl, token = null) {
     fs.rmSync(repoPath, { recursive: true, force: true });
   }
 
-  console.log(`Cloning into ${REPO_DIR}...`);
-  // Use the authenticated URL for cloning but don't log it (contains the token)
-  execSync(`git clone "${cloneUrl}" "${REPO_DIR}"`, {
+  // Ensure the parent directory exists
+  fs.mkdirSync(REPO_BASE_DIR, { recursive: true });
+
+  console.log(`Cloning into ${repoPath}...`);
+  // Clone into the absolute path — don't log the URL (it contains the token)
+  execSync(`git clone "${cloneUrl}" "${repoPath}"`, {
     stdio: 'inherit',
+    cwd:   REPO_BASE_DIR,
   });
 
-  // Configure a local git user so commits work on machines without a global
-  // user.name / user.email set up (e.g. Render's ephemeral containers).
-  execSync('git config user.email "codesync@local.dev"', { cwd: REPO_DIR, stdio: 'pipe' });
-  execSync('git config user.name "CodeSync"',            { cwd: REPO_DIR, stdio: 'pipe' });
+  // Configure a local git identity so commits work on Render (no global git config)
+  execSync('git config user.email "codesync@local.dev"', { cwd: repoPath, stdio: 'pipe' });
+  execSync('git config user.name "CodeSync"',            { cwd: repoPath, stdio: 'pipe' });
 
-  // If we have a token, also set the remote URL so `git push` is authenticated.
-  // This handles the case where the user passes an SSH URL for cloning but we
-  // need HTTPS for pushing in a token-auth environment.
+  // Update the remote URL to include the token so `git push` authenticates.
   if (token && repoUrl.startsWith('https://')) {
-    execSync(`git remote set-url origin "${cloneUrl}"`, { cwd: REPO_DIR, stdio: 'pipe' });
+    execSync(`git remote set-url origin "${cloneUrl}"`, { cwd: repoPath, stdio: 'pipe' });
   }
 
   console.log('Clone complete.\n');

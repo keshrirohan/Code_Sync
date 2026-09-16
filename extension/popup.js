@@ -3,7 +3,8 @@
 (async function () {
   "use strict";
 
-  const DEFAULT_BASE_URL = "https://codesync-api-5p2c.onrender.com";
+  const DEFAULT_BASE_URL = "https://codesync-api-5p2c.onrender.com"; // backend API
+  const DASHBOARD_URL    = "https://code-sync-3sld.onrender.com";    // frontend dashboard
 
   // DOM elements
   const lcDot          = document.getElementById("lc-dot");
@@ -55,7 +56,7 @@
 
   const baseUrl = await getBaseUrl();
 
-  if (openBtn) openBtn.addEventListener("click", () => chrome.tabs.create({ url: baseUrl }));
+  if (openBtn) openBtn.addEventListener("click", () => chrome.tabs.create({ url: DASHBOARD_URL }));
   if (lcBtn)   lcBtn.addEventListener("click",   () => chrome.tabs.create({ url: "https://leetcode.com" }));
 
   // Check Connection Status

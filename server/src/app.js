@@ -637,9 +637,19 @@ function buildLCHeaders(cookie) {
 
 async function performIncrementalSync(cfg) {
   const { leetcodeCookie, leetcodeUsername, githubToken, targetRepoUrl, lastAutoSyncAt } = cfg;
-  // Compare using millisecond-epoch so it works whether lastAutoSyncAt is
-  // an ISO string, a Date, or missing (0 = sync everything).
-  const sinceMs = lastAutoSyncAt ? new Date(lastAutoSyncAt).getTime() : 0;
+
+  // ── Step 1: Fetch recent accepted submissions ─────────────────────────────
+  // We use recentAcSubmissionList which takes a username. If the username is
+  // somehow missing from the stored config, fall back to a direct submissionList
+  // query via the full leetcodeClient pipeline instead.
+  let newSubs = [];
+
+  if (!leetcodeUsername) {
+    // Username missing — can't use recentAcSubmissionList.
+    // Fall back to full sync via the child-process handler path.
+    logger.warn('[Auto-sync] leetcodeUsername not set in config — skipping auto-sync. Run a manual full sync first to populate it.');
+    return { synced: 0 };
+  }
 
   const r = await fetch('https://leetcode.com/graphql', {
     method: 'POST',
@@ -649,34 +659,89 @@ async function performIncrementalSync(cfg) {
       variables: { u: leetcodeUsername, l: 20 },
     }),
   });
-  const data    = await r.json();
-  const recent  = data.data?.recentAcSubmissionList ?? [];
-  // LeetCode's recentAcSubmissionList now returns timestamp as an ISO 8601
-  // string (e.g. "2026-08-01T08:26:00+00:00") instead of a Unix integer.
-  // Use new Date() to parse either format, then compare in milliseconds.
-  const newSubs = recent.filter(s => new Date(s.timestamp).getTime() > sinceMs);
+
+  if (!r.ok) {
+    throw new Error(`LeetCode API returned HTTP ${r.status} — cookie may be expired`);
+  }
+
+  const data   = await r.json();
+  const recent = data.data?.recentAcSubmissionList ?? [];
+
+  logger.info(`[Auto-sync] recentAcSubmissionList returned ${recent.length} items for user "${leetcodeUsername}"`);
+
+  if (recent.length === 0) {
+    logger.warn('[Auto-sync] Empty recentAcSubmissionList — either no recent ACs or the LeetCode cookie is expired.');
+    return { synced: 0 };
+  }
+
+  // ── Step 2: Filter to submissions newer than last sync ─────────────────────
+  // LeetCode's timestamp field has returned both Unix-integer seconds AND
+  // ISO-8601 strings at different times. Handle both formats safely.
+  const sinceMs = lastAutoSyncAt ? new Date(lastAutoSyncAt).getTime() : 0;
+
+  newSubs = recent.filter(s => {
+    const ts = s.timestamp;
+    // If it looks like a number (Unix seconds), multiply by 1000
+    const ms = typeof ts === 'number' || /^\d{9,13}$/.test(String(ts))
+      ? Number(ts) * (String(ts).length <= 10 ? 1000 : 1)  // 10-digit = seconds, 13-digit = ms
+      : new Date(ts).getTime();
+    return ms > sinceMs;
+  });
+
+  logger.info(`[Auto-sync] ${newSubs.length} new submission(s) since last sync (sinceMs=${sinceMs})`);
+
+  // ── If nothing new, return without touching git or updating lastAutoSyncAt ─
+  // We deliberately do NOT update lastAutoSyncAt here so the next trigger
+  // re-checks the same window rather than sliding the window forward.
   if (newSubs.length === 0) return { synced: 0 };
 
+  // Deduplicate by titleSlug (keep most recent per problem)
   const bySlug = new Map();
   for (const s of newSubs) if (!bySlug.has(s.titleSlug)) bySlug.set(s.titleSlug, s);
 
+  // ── Step 3: Fetch full code for each new slug ──────────────────────────────
   const { fetchLatestSubmissionId, fetchSubmissionDetails } = await import('./leetcode/leetcodeClient.js');
   const gitClient = await import('./git/gitClient.js');
   const { getFileExtension, sanitizeFolderName } = await import('./sync/handler.js');
 
+  // ── Step 4: Clone the repo with token auth ─────────────────────────────────
   gitClient.init(targetRepoUrl, githubToken);
 
+  let committedCount = 0;
+
   for (const [slug] of bySlug) {
-    const subInfo = await fetchLatestSubmissionId(leetcodeCookie, slug);
-    if (!subInfo) continue;
-    const details    = await fetchSubmissionDetails(leetcodeCookie, subInfo.submissionId);
-    const folderName = sanitizeFolderName(`${details.questionId} ${details.title}`);
-    const ext        = getFileExtension(details.lang);
-    const fileName   = `${details.questionId}-${slug}.${ext}`;
-    const commitMsg  = `Add: ${details.questionId}. ${details.title}`;
-    gitClient.commit(folderName, fileName, details.code, commitMsg, details.lastSubmittedAt);
+    try {
+      const subInfo = await fetchLatestSubmissionId(leetcodeCookie, slug);
+      if (!subInfo) {
+        logger.warn(`[Auto-sync] No accepted submission found for slug "${slug}" — skipping`);
+        continue;
+      }
+
+      const details = await fetchSubmissionDetails(leetcodeCookie, subInfo.submissionId);
+      if (!details) {
+        logger.warn(`[Auto-sync] fetchSubmissionDetails returned null for submission ${subInfo.submissionId} — skipping`);
+        continue;
+      }
+
+      // Guard against missing questionId or title (would cause bad folder names)
+      const questionId = details.questionId || 'unknown';
+      const title      = details.title      || slug;
+
+      const folderName = sanitizeFolderName(`${questionId} ${title}`);
+      const ext        = getFileExtension(details.lang);
+      const fileName   = `${questionId}-${slug}.${ext}`;
+      const commitMsg  = `Add: ${questionId}. ${title}`;
+
+      gitClient.commit(folderName, fileName, details.code, commitMsg, details.lastSubmittedAt);
+      committedCount++;
+      logger.info(`[Auto-sync] Committed: ${title}`);
+    } catch (err) {
+      // Log per-problem failures but continue with remaining problems
+      logger.error(`[Auto-sync] Failed to process slug "${slug}": ${err.message}`);
+    }
   }
 
+  // ── Step 5: Regenerate README ──────────────────────────────────────────────
   try {
     const { scanRepo, generateReadme } = await import('./sync/readmeGenerator.js');
     const repoPath  = gitClient.getRepoPath();
@@ -688,14 +753,27 @@ async function performIncrementalSync(cfg) {
     logger.warn('[Auto-sync] README generation skipped:', { err: err.message });
   }
 
+  // ── Step 6: Push ───────────────────────────────────────────────────────────
+  // If nothing was actually committed (all slugs failed/skipped), skip the push
+  // to avoid an empty `git push` that could still fail on auth issues.
+  if (committedCount === 0) {
+    logger.warn('[Auto-sync] No commits made — skipping push');
+    // Clean up the cloned repo
+    try {
+      const repoPath = gitClient.getRepoPath();
+      const { rmSync, existsSync } = await import('fs');
+      if (existsSync(repoPath)) rmSync(repoPath, { recursive: true, force: true });
+    } catch {}
+    return { synced: 0 };
+  }
+
   gitClient.push();
 
   // Update the lastSyncedSlugs with the newly synced slugs
   const existingSlugs = cfg.lastSyncedSlugs || [];
-  const newSlugsList = [...bySlug.keys()];
-  const allSlugs = [...new Set([...existingSlugs, ...newSlugsList])];
+  const allSlugs = [...new Set([...existingSlugs, ...[...bySlug.keys()]])];
 
-  return { synced: bySlug.size, updatedSlugs: allSlugs };
+  return { synced: committedCount, updatedSlugs: allSlugs };
 }
 
 async function runAutoSync() {
@@ -703,20 +781,28 @@ async function runAutoSync() {
   autoSyncState.running = true;
   try {
     const cfg = await loadConfig();
-    if (!cfg.leetcodeCookie || !cfg.githubToken || !cfg.targetRepoUrl) return;
-    const result = await performIncrementalSync(cfg);
-    cfg.lastAutoSyncAt = new Date().toISOString();
-    if (result.updatedSlugs) {
-      cfg.lastSyncedSlugs = result.updatedSlugs;
+    if (!cfg.leetcodeCookie || !cfg.githubToken || !cfg.targetRepoUrl) {
+      logger.warn('[Auto-sync] Skipped — missing cookie, token, or repoUrl in config');
+      return;
     }
-    await saveConfig(cfg);
+    const result = await performIncrementalSync(cfg);
     autoSyncState.lastResult = result;
+
+    // Only advance the lastAutoSyncAt window when something was actually synced.
+    // If we update it on every trigger (including no-ops), future triggers compare
+    // against "just now" and will never find anything.
+    if (result.synced > 0) {
+      const updates = { lastAutoSyncAt: new Date().toISOString() };
+      if (result.updatedSlugs) updates.lastSyncedSlugs = result.updatedSlugs;
+      await saveConfig(updates);
+    }
+
     logger.info(`[Auto-sync] Done — ${result.synced} new submission(s) pushed`);
   } catch (err) {
     logger.error('[Auto-sync] Error:', { err: err.message });
     autoSyncState.lastResult = { error: err.message };
   } finally {
-    autoSyncState.running  = false;
+    autoSyncState.running   = false;
     autoSyncState.lastRunAt = new Date().toISOString();
   }
 }
@@ -759,9 +845,51 @@ app.post('/api/sync/auto/config', async (req, res) => {
 });
 
 app.post('/api/sync/auto/trigger', async (req, res) => {
+  // Respond immediately — the actual sync runs async
   res.json({ ok: true, message: 'Auto-sync triggered' });
-  // Run async — don't await (response already sent)
   runAutoSync().catch(err => logger.error('[Trigger] Auto-sync failed:', { err: err.message }));
+});
+
+// ── API: Reset last-sync timestamp (useful for testing / re-syncing) ─────────
+// POST /api/sync/reset — clears lastAutoSyncAt so the next trigger re-checks
+// all recent submissions from the beginning. Also clears lastSyncedSlugs.
+app.post('/api/sync/reset', async (req, res) => {
+  try {
+    await saveConfig({
+      lastAutoSyncAt:  null,
+      lastSyncedSlugs: [],
+      lastFullSyncAt:  null,
+    });
+    autoSyncState.lastRunAt  = null;
+    autoSyncState.lastResult = null;
+    res.json({ ok: true, message: 'Sync state reset — next trigger will re-check all recent submissions' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── API: Sync debug — see exactly why a sync succeeded or failed ──────────────
+// GET /api/sync/debug — returns the live autoSyncState plus key config flags
+// (no credentials exposed). Use this to diagnose "syncs silently do nothing".
+app.get('/api/sync/debug', async (req, res) => {
+  try {
+    const cfg = await loadConfig();
+    res.json({
+      autoSyncState,
+      config: {
+        hasLeetcodeCookie:   !!cfg.leetcodeCookie,
+        leetcodeUsername:    cfg.leetcodeUsername    || null,
+        hasGithubToken:      !!cfg.githubToken,
+        githubUsername:      cfg.githubUsername      || null,
+        targetRepoUrl:       cfg.targetRepoUrl       || null,
+        autoSyncEnabled:     !!cfg.autoSyncEnabled,
+        lastAutoSyncAt:      cfg.lastAutoSyncAt      || null,
+        lastSyncedSlugCount: (cfg.lastSyncedSlugs || []).length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────────
